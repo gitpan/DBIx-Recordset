@@ -19,8 +19,6 @@
 
 package DBIx::Compat ;
 
-use Carp qw(cluck);
-use Data::Dumper;
 use DBI ;
 
 sub SelectFields
@@ -130,23 +128,6 @@ sub ListTablesFunc
 
     return @tabs ;
     }
-
-sub ListTablesMySQL
-
-  {
-   
-      my $hdl = shift;
-
-      my @tabs =  ListTablesFunc ($hdl) ;
-
-#      die Dumper(\@tabs);
-
-      @tabs = map { s/`//g; $_ } @tabs;
-
-
-      
-  }
-
 
 sub ListTablesPg
 
@@ -396,7 +377,7 @@ sub InformixGetSerial
             'Placeholders' => 10,		    # Placeholders supported, but the perl
 						    #   type must be the same as the db type
             'SQLJoinOnly2Tabs' => 0,		    # mysql supports LEFT/RIGHT JOIN with more than two tables
-            'ListTables'     => \&ListTablesMySQL,   # DBD::mysql $dbh -> func
+            'ListTables'     => \&ListTablesFunc,   # DBD::mysql $dbh -> func
 	    'LimitOffset'    => \&LimitOffsetStrMySQL, 
             'GetSerialPostInsert' => \&MysqlGetSerial,
             'CreateTypes' =>                        # conversion for CreateTables
@@ -503,21 +484,12 @@ sub InformixGetSerial
 
 sub GetItem
 
-  {
-      my ($driver, $name) = @_ ;
+    {
+    my ($driver, $name) = @_ ;
 
-      my $return;
-
-      if (exists ($Compat{$driver}{$name})) 
-	{
-	    $return =  $Compat{$driver}{$name}  ;
-	}
-      else
-	{
-#	    cluck "returning default for $name on driver $driver";
-	    $return =  $Compat{'*'}{$name} ; 
-	}
-  }
+    return $Compat{$driver}{$name}  if (exists ($Compat{$driver}{$name})) ;
+    return $Compat{'*'}{$name} ; 
+    }
 
 1 ;
 

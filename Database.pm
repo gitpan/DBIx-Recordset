@@ -1,7 +1,7 @@
 
 ###################################################################################
 #
-#   DBIx::Database - Copyright (c) 1997-2003 Gerald Richter / ECOS
+#   DBIx::Recordset - Copyright (c) 1997-2000 Gerald Richter / ECOS
 #
 #   You may distribute under the terms of either the GNU General Public
 #   License or the Artistic License, as specified in the Perl README file.
@@ -29,9 +29,8 @@ use vars qw{$LastErr $LastErrstr *LastErr *LastErrstr *LastError $PreserveCase} 
 *PreserveCase   = \$DBIx::Recordset::PreserveCase;
 
 
-use Carp qw(confess cluck);
+use Carp qw(confess);
 
-use Data::Dumper;
 use File::Spec ;
 use DBIx::Recordset ;
 use Text::ParseWords ;
@@ -167,16 +166,6 @@ sub do($$;$$$)
     
     return $ret ;
     }
-
-
-## ----------------------------------------------------------------------------
-##
-## _build_meta_key
-##
-## used to build the metakey to find tables.o
-## $table        = table (multiple tables must be comma separated)
-##
-
 
 
 ## ----------------------------------------------------------------------------
@@ -360,6 +349,8 @@ sub QueryMetaData($$)
                 my $tabfilter = $self -> {'*TableFilter'} || '.' ;
                 foreach (@tabs)
                     {
+		    s/^[^a-zA-Z0-9_.]// ;
+		    s/[^a-zA-Z0-9_.]$// ;
                     if ($_ =~ /(^|\.)$tabfilter/i)
                         {
                         @stab = split (/\./);
@@ -479,8 +470,6 @@ sub QueryMetaData($$)
 ###################################################################################
 
 package DBIx::Database ;
-
-use Carp qw(cluck confess);
 
 use strict 'vars' ;
 
@@ -620,7 +609,10 @@ sub new
       {
 
 	  $self->{'*DBHdl'}      = $data_source;
-	  $self->{'*Driver'}     = $data_source->{Driver}->{Name};
+      }
+    else
+      {
+
       }
 
     if (!defined ($self->{'*DBHdl'}))
@@ -649,8 +641,6 @@ sub new
         { # Query the driver, which tables are available
         my $ListTables = DBIx::Compat::GetItem ($drv, 'ListTables') ;
 
-#	cluck ("listtables ($drv): $ListTables");
-
         
         if ($ListTables)
 	    {
@@ -661,6 +651,8 @@ sub new
             $tabfilter ||= '.' ;
             foreach (@tabs)
                 {
+	        s/^[^a-zA-Z0-9_.]// ;
+		s/[^a-zA-Z0-9_.]$// ;
                 if ($_ =~ /(^|\.)$tabfilter/i)
                     {
                     @stab = split (/\./);
@@ -752,10 +744,7 @@ sub TableAttr
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-	    my $metadump = Dumper(\%DBIx::Recordset::Metadata);
-	    my $diag  =  "Unknown table $table in $self->{'*DataSource'}
-Here is the Metadata hash: $metadump";
-        $self -> savecroak ($diag);
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
         }
 
     # set new value if wanted
@@ -797,10 +786,7 @@ sub TableLink
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-	    my $metadump = Data::Dumper::Dumper(\%DBIx::Recordset::Metadata);
-	    my $diag = "Unknown table $table in $self->{'*DataSource'}
-Metadata dump: $metadump";
-	    $self -> savecroak ($diag);
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
         }
 
     return $meta -> {'*Links'} if (!defined ($key)) ;

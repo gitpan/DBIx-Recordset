@@ -69,7 +69,7 @@ require Exporter;
 
 @ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.25a';
+$VERSION = '0.26';
 
 
 $PreserveCase = 0 ;
@@ -618,7 +618,7 @@ sub Setup
 sub ReleaseRecords
 
     {
-    undef $_[0] -> {'*LastKey'} ;
+    $_[0] -> {'*LastKey'} = undef ;
     $_[0] -> Flush (1) ;
     #delete $Data{$_[0] -> {'*Id'}}  ;
     $Data{$_[0] -> {'*Id'}} = [] ;
@@ -737,9 +737,6 @@ sub Begin
 
     # 'begin' method is unhandled by DBI
     ## ??  $self->{'*DBHdl'} -> func('begin') unless $self->{'*DBHdl'}->{'AutoCommit'};
-
-    $self->{'*DBHdl'}->begin_work;
-
     }
 
 ## ----------------------------------------------------------------------------
@@ -1375,9 +1372,7 @@ sub SQLSelect ($;$$$$$$$)
             #$sth -> bind_param ($i+1, $bind_values -> [$i], {TYPE => $bti}) ;
             #$sth -> bind_param ($i+1, $bind_values -> [$i], $bind_types -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef) ;
 	    my $bt = $bind_types -> [$i] ;
-	    my @bind_param = ($i+1, $bind_values -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE => $bt}:undef ) ;
-#	    warn Dumper(\@bind_param);
-            $sth -> bind_param (@bind_param);
+            $sth -> bind_param ($i+1, $bind_values -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE => $bt}:undef ) ;
             }
         $rc = $sth -> execute  ;
 	$self->{'*SelectedRows'} = $sth->rows;
@@ -3693,6 +3688,38 @@ sub DESTROY
 
 ##########################################################################################
 
+package DBIx::Recordset::Access ;
+
+use overload 'bool' => sub { 1 }, '%{}' => \&gethash, '@{}' => \&getarray ; #, '${}' => \&getscalar ;
+
+sub new 
+    {
+    my $class = shift;
+    my $arg   = shift ;
+    bless $arg, $class;
+    }
+
+
+sub gethash 
+    {
+    my $self = shift ;
+    return \%$$self ;
+    }
+
+sub getarray
+    {
+    my $self = shift ;
+    return \@$$self ;
+    }
+
+sub getscalar
+    {
+    my $self = shift ;
+    return \$$$self ;
+    }
+
+##########################################################################################
+
 package DBIx::Recordset::Row ;
 
 use Carp ;
@@ -3895,7 +3922,8 @@ sub FETCH
                     $setup -> {'!DataSource'} = $rs if (!defined ($link -> {'!DataSource'})) ;
                     print DBIx::Recordset::LOG "DB:  Row::FETCH $key = Setup New Recordset for table $link->{'!Table'}, $lf = " . (defined ($mv)?$mv:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
 
-                    $linkset = $self -> {'*data'}{$key} = DBIx::Recordset -> Search ($setup) ;
+                    $linkset = DBIx::Recordset -> Search ($setup) ;
+                    $data = $self -> {'*data'}{$key} = DBIx::Recordset::Access -> new(\$linkset) ;
 
                     if ($link -> {'!Cache'})
                         {
@@ -3905,8 +3933,8 @@ sub FETCH
                 else
                     {
                     $$linkset -> Reset ;
+                    $data = DBIx::Recordset::Access -> new(\$linkset) ;
                     }
-                $data = $linkset ;
                 }
 
             my $of = $rs -> {'*OutputFunctions'}{$key} ;
@@ -4088,12 +4116,11 @@ DBIx::Recordset - Perl extension for DBI recordsets
 
  use DBIx::Recordset;
 
- # Setup a new object and select some records...
+ # Setup a new object and select some recods...
  *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:Oracle:....',
                                     '!Table'      => 'users',
-                                    name          => 'richter',
-                                    age           => 25
-                                    ));
+                                    '$where'      => 'name = ? and age > ?',
+                                    '$values'     => ['richter', 25] }) ;
 
  # Get the values of field foo ...
  print "First Records value of foo is $set[0]{foo}\n" ;
@@ -4128,41 +4155,36 @@ DBIx::Recordset is a perl module for abstraction and simplification of
 database access.
 
 The goal is to make standard database access (select/insert/update/delete)
-easier to handle and independent of the underlying DBMS. Special attention is
-paid to web applications to make it possible to handle the state-less access
+easier to handle and independend of the underlying DBMS. Special attention is
+made on web applications to make it possible to handle the state-less access
 and to process the posted data of formfields, but DBIx::Recordset is not
 limited to web applications.
 
-B<DBIx::Recordset> uses the DBI API to access the database, so it should   
-work with every database for which a DBD driver is available (see also
-DBIx::Compat).  
+B<DBIx::Recordset> uses the DBI API to access the database, so it should work with
+every database for which a DBD driver is available (see also DBIx::Compat).
 
 Most public functions take a hash reference as parameter, which makes it simple
 to supply various different arguments to the same function. The parameter hash
-can also be taken from a hash containing posted formfields like those available
-with CGI.pm, mod_perl, HTML::Embperl and others.
+can also be taken from a hash containing posted formfields like those available with
+CGI.pm, mod_perl, HTML::Embperl and others.
 
 Before using a recordset it is necessary to setup an object. Of course the
-setup step can be made with the same function call as the first database
-access, but it can also be handled separately.
+setup step can be made with the same function call as the first database access,
+but it can also be handled separately.
 
-Most functions which set up an object return a B<typeglob>. A typeglob in Perl
-is an object which holds pointers to all datatypes with the same
-name. Therefore a typeglob 
-must always have a name and can B<not> be declared with B<my>. You can only
+Most functions which set up an object return a B<typglob>. A typglob in Perl is an 
+object which holds pointers to all datatypes with the same name. Therefore a typglob
+must always have a name and B<can't> be declared with B<my>. You can only
 use it as B<global> variable or declare it with B<local>. The trick for using
-a typeglob is that setup functions can return a B<reference to an object>, an
+a typglob is that setup functions can return a B<reference to an object>, an
 B<array> and a B<hash> at the same time.
 
 The object is used to access the object's methods, the array is used to access
 the records currently selected in the recordset and the hash is used to access
 the current record.
 
-If you don't like the idea of using typeglobs you can also set up the object,
+If you don't like the idea of using typglobs you can also set up the object,
 array and hash separately, or just set the ones you need.
-
-For an extensive collection of runnable DBIx::Recordset examples see
-L<DBIx::Recordset::Playground>.
 
 =head1 ARGUMENTS
 
@@ -4267,9 +4289,9 @@ consist of the fieldnames, but are built in the form table.field.
 
 =item B<!Order>
 
-Fields which should be used for ordering any query. If you have specified
-multiple tables the fieldnames should be unique. If the names are not unique
-you must specify them among with the tablename (e.g. tab1.field).
+Fields which should be used for ordering any query. If you have specified multiple
+tables the fieldnames should be unique. If the names are not unique you must
+specify them among with the tablename (e.g. tab1.field).
 
 
 NOTE 1: Fieldnames specified with !Order can't be overridden. If you plan
@@ -4426,8 +4448,8 @@ All fields with an undefined value are ignored when building the WHERE expressio
 
 =item B<2>
 
-All fields with an undefined value or an empty string are ignored when building
-the WHERE expression.
+All fields with an undefined value or an empty string are ignored when building the 
+WHERE expression.
 
 =back
 
@@ -4730,8 +4752,8 @@ Operator for the named field
  'value' => 9, '*value' => '>' expand to value > 9
 
 
-Could also be an array ref, so you can pass different operators for the
-values. This is mainly handy when you need to select a range
+Could also be an array ref, so you can pass different operators for the values. This
+is mainly handy when you need to select a range
 
   Example:
 
@@ -4766,52 +4788,6 @@ specify more the one sub expression, add a numerical index to $expr (e.g. $expr1
                      
 
 =head2 Search parameters
-
-=item B<!Query> (new in 0.25)
-
-Providing this parameter allows one to give a full SQL query to Recordset. A
-completely working example exists in L<DBIx::Recordset::Playground>:
-
- use vars qw(*set);
-
- *set =
-   DBIx::Recordset -> Search
-   ({
-    '!DataSource' => dbh(),
-    '$max' => 4,
-    '!Query' => 'SELECT * FROM AUTHORS'
-   });
-
- while ($set->Next) {
-    print Dumper(\%set)
- }
-
-
-=item B<$makesql> (new in 0.25)
-
-Providing this flag generates SQL but does not execute it against the database:
-
-        $set -> Search 
-	  ({
-	    id => 5, '$order' => 'id', '$group' => 'name', 
-	    '$append' => ';;', '$makesql' => 1
-	   }) ;
-
-
-        my $sql     = $set -> LastSQLStatement ;
-
- # yields...
-
-         SELECT 
-           id, name, txt 
-         FROM 
-           dbixrs1, dbixrs3 
-         WHERE 
-           (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) 
-         GROUP BY 
-           name 
-         ORDER BY 
-           id
 
 =item B<$start>
 
@@ -6412,40 +6388,22 @@ Name)) or (  (  id > 6 and addon <> 6)  or  (  id > 0 and addon <> 0))) ;
 
 =head1 SUPPORT
 
-Support is available on the HTML::Embperl mailing list:
-
-    embperl@perl.apache.org
-
-Put "DBIx::Recordset" in the title
+As far as possible for me, support will be available via the DBI Users' mailing 
+list. (dbi-user@fugue.com)
 
 =head1 AUTHOR
 
-DBIx::Recordset is maintained by 
-Terrence Brannon (metaperl@urth.org)
-
-It was written by
-Gerald Richter (richter@dev.ecos.de)
-
-=head1 TESTED ON
-
-The latest DBI drivers for MySQL, SQLite and Postgresql.
-
-Tests/patches for other databases welcome!
-
+G.Richter (richter@dev.ecos.de)
 
 =head1 SEE ALSO
 
-=item Perl
-=item L<DBI>
-=item L<DBIx::Recordset::Playground>
-=item L<DBSchema::Sample>
-=item L<DBIx::Compat>
-=item L<DBIx::Database>
-=item L<HTML::Embperl>
+=item Perl(1)
+=item DBI(3)
+=item DBIx::Compat(3)
+=item HTML::Embperl(3) 
 http://perl.apache.org/embperl/
-=item L<Tie::DBI>
+=item Tie::DBI(3)
 http://stein.cshl.org/~lstein/Tie-DBI/
-
 
 
 =cut

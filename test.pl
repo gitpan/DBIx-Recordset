@@ -412,7 +412,7 @@ sub AddTestData
 
 sub DropTestTables   {
     my ($_dbh, @tlist) =@_;
-    return unless ($_dbh and @tlist);
+    return unless ($dbh and @tlist);
     foreach (@tlist) 
       {
 	  if ($QuoteIdentifier)
@@ -3667,16 +3667,12 @@ use strict ;
 
         foreach (@Table)
             {
-
-		if (!$tables -> {lc($_)} && !$tables -> {uc($_)} )
+            if (!$tables -> {lc($_)} && !$tables -> {uc($_)} )
                 {
                 printlog "ERROR in $lasttest: table $_ not found\n" ;
 	        $errors++ ;
                 }        
-		my $l = $db -> TableLink ($_) ;
-		
-		warn "TableLink for $_: " . Dumper($l);
-		
+            my $l = $db -> TableLink ($_) ;
             if ($_ eq $Table[1] && (($n = keys (%$l)) != 1 || !$l -> {"-$Table[3]"}))
                 {
                 printlog "ERROR in $lasttest: table $_ does not contains the right link  (#$n)\n" ;
@@ -3959,13 +3955,11 @@ use strict ;
     #########################################################################################
 
      # cleanup
-     if (!$nocleanup and $Driver ne 'SQLite')
+     if (!$nocleanup)
         {
-
         my  $dbh = DBIx::Recordset -> SetupObject ({'!DataSource' =>  $dbh,
                                                  '!Username' =>  $User, '!Password' =>  $Password
                                                 });
-
         DropTestTables($dbh, @Table);
         $dbh->Disconnect;
         }

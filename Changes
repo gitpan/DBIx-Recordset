@@ -1,20 +1,25 @@
-2004-01-20  U-MOKSHA\metaperl  <metaperl@urth.org>
 
-	* removed a debugging cluck() call. this creates version 0.25a for
-	CPAN.
+0.26 29. Sept 2004
 
-0.25
-2003-12-07  U-MOKSHA\metaperl  <metaperl@urth.org>
+    - fix "Can't upgrade that kind of scalar", so it now runs with Perl5.8.x
+
+    - remove backticks around table names returned at least from newer versions
+      of DBI::mysql and DBD::ODBC
+
+
+0.25 30 Dec. 2003
+    
+    2003-12-07  U-MOKSHA\metaperl  <metaperl@urth.org>
 
 	* Recordset.pm : added support for direct Query input.
 
-2003-12-02  U-MOKSHA\metaperl  <metaperl@urth.org>	
+    2003-12-02  U-MOKSHA\metaperl  <metaperl@urth.org>	
 	
 	* test.pl (DoTest): all tests now pass successfully for Postgres
 	and SQLite
 	
 	
-2003-11-26  U-MOKSHA\metaperl  <metaperl@urth.org>
+    2003-11-26  U-MOKSHA\metaperl  <metaperl@urth.org>
 
 	* Recordset.pm (BuildFields): when building the FROM clause for
 	LEFT JOINs Recordset placed parentheses around it, like this:
@@ -39,7 +44,7 @@
 
   - Make sure filters given by name override filters given by type.
 
-  t0.24 10. July 2001
+0.24 10. July 2001
 
   - Added Code to DBIx::Database to Create/Modify/Drop tables
     See CreateTables/DropTables
