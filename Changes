@@ -1,5 +1,24 @@
 Revision history for Perl extension DBIx::Recordset
 
+0.17  8 Oct 1998
+  - DBIx::Recordset now can handle subtables. This means if you have
+    one tables which has field which is an key for another table
+    you are able to access the second table via $set{first}{subfield}
+    DBIx::Recordset handles this by creating a special link field,
+    which is actually a new Recordset object.
+    Look at "Working with multiple tables" in the documentation.    
+  - You can now call the method add to get an empty new record and
+    then simply put data in the current record 
+  - Metadata is cached, that means if you open the same table a
+    second time DBIx::Recordset does not query the driver again
+    for the metadata, but uses the cached values instead.
+  - The Flush methods returns now undef on error, otherwise a true
+    value
+  - Adapted the data types for newer mSQL drivers in DBIx::Compat
+  - Added documentation about working with mulitple tables
+  - Added documentation about debugging and DBIx::Recordset logfile
+  - DBD::CSV works together with DBIx::Recordset
+
 0.16  26 Aug 1998
   - Reworked memory management
     1.) DBIx::Recordset will be correctly destroyed and the statement handles 

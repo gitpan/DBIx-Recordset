@@ -73,28 +73,6 @@ sub ListFieldsFunc
 
 ####################################################################################
 
-#%Sql2Pg = (
-#    SQL_CHAR        => 'char ($size)',
-#    SQL_NUMERIC     => 'float',
-#    SQL_DECIMAL     => 'float',
-#    SQL_INTEGER     => 'integer',
-#    SQL_SMALLINT
-#    SQL_FLOAT
-#    SQL_REAL
-#    SQL_DOUBLE
-#    SQL_VARCHAR
-#    SQL_DATE
-#    SQL_TIME
-#    SQL_TIMESTAMP
-#    SQL_LONGVARCHAR
-#    SQL_BINARY
-#    SQL_VARBINARY
-#    SQL_LONGVARBINARY
-#    SQL_BIGINT
-#    SQL_TINYINT
-#    SQL_BIT
-#    )            
-
 
 %Compat =
     (
@@ -148,7 +126,9 @@ sub ListFieldsFunc
             'Placeholders' => 2,                 # Placeholders supported, but the perl
                                                #   type must be the same as the db type
             'ListFields'   => \&ListFields,      # mSQL has it own ListFields function
-            'QuoteTypes'   => {   2=>1,   6=>1 }
+            'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1 }
+# ### use the following line for older mSQL drivers
+#            'QuoteTypes'   => {   2=>1,   6=>1 }
             },
 
     'mysql' => {
@@ -250,6 +230,8 @@ Currently there are entry for
 =item B<DBD::Solid>
 
 =item B<DBD::ODBC>
+
+=item B<DBD::CSV>
 
 
 if you detect an error in the definition or add an definition for a new

@@ -10,9 +10,10 @@ use vars qw{ *set1 *set2 *set3 *set4 *set5 *set6 *set7 *set8 *set9 *set10
              @TestData @TestFields %TestCheck %hTestFields1 %hTestIds1 @TestSetup @TestIds
              @Table $Driver $DSN $User $Password
              @drivers %Drivers 
-             $dbh $drv %errcnt $err $rc
+             $dbh $drv %errcnt $err $rc $contcnt
              $errors $fatal $loaded
-             $Join} ;
+             $Join
+             *rs $rs @rs %rs} ;
 
 
 BEGIN { $| = 1;  $fatal = 1 ; print "\nLoading...                "; }
@@ -44,7 +45,18 @@ sub printlog
 
 sub printlogf
     {
-    formline ('@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<... ', $_[0]) ;
+    my $txt = shift ;
+    if (!$txt)
+        {
+        $txt = "  - $contcnt " ;
+        $contcnt++ ;
+        }
+    else
+        {
+        $contcnt = 2 ;
+        }
+
+    formline ('@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<... ', $txt) ;
     printlog $^A ;	
     $^A = '' ;
     }
@@ -330,18 +342,6 @@ sub DoTest
     @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4') ;
 
     $errors = 0 ;
-    
-    open LOG, ">>test.log" or die "Cannot open test.log" ; 
-
-    *DBIx::Recordset::LOG = \*LOG ; 
-    $DBIx::Recordset::Debug = 2 ; 
-
-    open (STDERR, ">&LOG") || die "Cannot redirect stderr" ;  
-    #open (STDERR, ">dbi.log") || die "Cannot redirect stderr" ;  
-    #DBI->trace(2) ;
-    select (STDERR) ; $| = 1 ;
-    select (LOG) ; $| = 1 ;
-    select (STDOUT) ; $| = 1 ;
 
     printlog "\nUsing the following parameters for testing:\n" ;
     printlog "  DBD-Driver:  $Driver\n" ;
@@ -1241,10 +1241,12 @@ use strict ;
 
     $set20  -> Search ({'id'            =>  4}) or die "not ok ($DBI::errstr)" ;
 
+    printlogf "";
     Check ([4], $TestFields[0], \@set20) or print "ok\n" ;
     
     $set20  -> Search ({'id'            =>  1234}) or die "not ok ($DBI::errstr)" ;
 
+    printlogf "";
     Check ([1234], $TestFields[0], \@set20) or print "ok\n" ;
     
 
@@ -1288,6 +1290,7 @@ use strict ;
                                             '!PrimKey'      =>  'id',
                                             'id'            =>  1234}) or die "not ok ($DBI::errstr)" ;
     
+    printlogf "";
     Check ([1234], $TestFields[0], \@set20c) or print "ok\n" ;
     
     
@@ -1348,7 +1351,7 @@ use strict ;
     
     Check ([123456], $TestFields[0], \@set20c) or print "ok\n" ;
     
-    printlogf "Array Add Empty Record";
+    printlogf "Array Add Empty Record (Ndx)";
     print LOG "\n--------------------\n" ;
     
     my $ndx = $set20 -> Add ()  ;
@@ -1379,6 +1382,38 @@ use strict ;
     
     Check ([1234567], $TestFields[0], \@set20c) or print "ok\n" ;
     
+    printlogf "Array Add Empty Record (CurrRec)";
+    print LOG "\n--------------------\n" ;
+    
+    $set20 -> Add ()  ;
+    
+    $set20{id} = 876 ;
+    $set20{name}  = 'New rec 876' ;
+
+    
+    # write it to the db
+    print LOG "Flush\n" ;
+    $set20 -> Flush () ;
+    
+    AddTestRowAndId (0, {
+                        'id'   => 876,
+                        'name' => 'New rec 876',
+                        }) ;
+    
+    
+    #$set20c -> Search ({'id'            =>  876}) or die "not ok ($DBI::errstr)" ;
+    # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
+    DBIx::Recordset::Undef ('set20c') ;
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[0],
+                                            '!PrimKey'      =>  'id',
+                                            'id'            =>  876}) or die "not ok ($DBI::errstr)" ;
+    
+    Check ([876], $TestFields[0], \@set20c) or print "ok\n" ;
+
+
     DBIx::Recordset::Undef ('set20') ;
     DBIx::Recordset::Undef ('set20c') ;
 
@@ -1422,6 +1457,7 @@ use strict ;
                 {
                 @set13h = () ;
                 $set13h[0] = $v ;
+                printlogf "" if ($i > 0) ;
                 Check ([$k], $TestFields[1], \@set13h) or print "ok\n" ;
                 $i++ ;
                 }
@@ -1635,6 +1671,318 @@ use strict ;
 
     DBIx::Recordset::Undef ('set14') ;
 
+    # ---------------------
+
+    printlogf "MoreRecords on empty set";
+    print LOG "\n--------------------\n" ;
+
+    *set4 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        'id' => 9753    })  or die "not ok ($DBI::errstr)" ;
+
+    if ($set4 -> MoreRecords)
+        {
+        print "ERROR, MoreRecords returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    DBIx::Recordset::Undef ('set4') ;
+
+    # ---------------------
+
+    printlogf "First on empty set";
+    print LOG "\n--------------------\n" ;
+
+    *set5 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        'id' => 9753    })  or die "not ok ($DBI::errstr)" ;
+
+    if ($set5 -> First)
+        {
+        print "ERROR, First returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    DBIx::Recordset::Undef ('set5') ;
+
+# ---------------------
+
+    printlogf "Next on empty set";
+    print LOG "\n--------------------\n" ;
+
+    *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        'id' => 9753    })  or die "not ok ($DBI::errstr)" ;
+
+    if ($set6 -> Next)
+        {
+        print "ERROR, Next returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    DBIx::Recordset::Undef ('set6') ;
+
+# ---------------------
+
+    printlogf "Update via assigning array ref";
+    print LOG "\n--------------------\n" ;
+
+    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        '$order'        =>  'id'    })  or die "not ok ($DBI::errstr)" ;
+
+    Check ($TestIds[1], $TestFields[1], \@set1) or print "ok\n" ;
+
+    
+    #my @array = $set1{value2} ;
+    #my $id ;
+    #
+    #for ($id = 0; $id <= $#array; $id++)
+    #    {
+    #    print LOG "CHK: array[$id] = $array[$id], should $TestCheck{$id}{value2}\n" ;
+    #    if ($array[$id] != $TestCheck{$id}{value2}) 
+    #        {
+    #        $errors++ ;
+    #        printlog ("Error array[$id] = $array[$id], should $TestCheck{$id}{value2}\n") 
+    #        }
+    #    }
+
+    $set1{value2} = [1234, 2345, 3456, 4567] ;
+
+    $set1 -> Flush ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 1,
+                        'value2' => '1234',
+                        }) ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 2,
+                        'value2' => '2345',
+                        }) ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 3,
+                        'value2' => '3456',
+                        }) ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 4,
+                        'value2' => '4567',
+                        }) ;
+
+
+    DBIx::Recordset::Undef ('set1') ;
+
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                            })  or die "not ok ($DBI::errstr)" ;
+
+    printlogf "";
+    Check ($TestIds[1], $TestFields[1], \@set1_) or print "ok\n" ;
+
+    DBIx::Recordset::Undef ('set1_') ;
+
+    # ---------------------
+
+    printlogf "Update via assigning array ref 2";
+    print LOG "\n--------------------\n" ;
+
+    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        'id' => 9753    })  or die "not ok ($DBI::errstr)" ;
+
+    Check ([], $TestFields[1], \@set1) or print "ok\n" ;
+
+
+    $set1{id} = [9753, 9754, 9755, 9756] ;
+    $set1{name2} = ['a', 'b', 'c', 'd'] ;
+    $set1{value2} = [12340, 23450, 34560, 45670] ;
+
+    $set1 -> Flush ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 9753,
+                        'name2' => 'a',
+                        'value2' => '12340',
+                        }) ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 9754,
+                        'name2' => 'b',
+                        'value2' => '23450',
+                        }) ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 9755,
+                        'name2' => 'c',
+                        'value2' => '34560',
+                        }) ;
+
+    AddTestRowAndId (1, {
+                        'id'   => 9756,
+                        'name2' => 'd',
+                        'value2' => '45670',
+                        }) ;
+
+
+    DBIx::Recordset::Undef ('set1') ;
+
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        'id' => "9753\t9754\t9755\t9756"    })  or die "not ok ($DBI::errstr)" ;
+
+    printlogf "";
+    Check ([9753, 9754, 9755, 9756], $TestFields[1], \@set1_) or print "ok\n" ;
+
+    DBIx::Recordset::Undef ('set1_') ;
+
+    # ---------------------
+
+    printlogf "Select with sub table";
+    print LOG "\n--------------------\n" ;
+
+    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[0]",
+                                        '!Links'        =>  {
+                                                            'subid' => {
+                                                                '!Table' => $Table[3],
+                                                                '!LinkedField' => 'id',
+                                                                '!PrimKey' => 'typ'
+								}
+                                                            },
+                                        'id'            =>  2,
+                                            })  or die "not ok ($DBI::errstr)" ;
+
+    Check ([2], $TestFields[0], \@set1) or print "ok\n" ;
+    printlogf "";
+    Check (['Second item Type 1',          
+            'Second item Type 2',
+            'Second item Type 3',
+            'Second item Type 4'], $TestFields[3], $set1{subid}, 'typ') or print "ok\n" ;
+
+    if ($Driver ne 'Solid')
+	{
+
+    printlogf "Modify sub table";
+    print LOG "\n--------------------\n" ;
+
+    $set1[0]{subid}[1]{typ} = '2.item, new Type 2' ;
+
+    AddTestRowAndId (3, {
+                        'id'   => 2,
+                        'typ' => '2.item, new Type 2',
+                        }, 'typ') ;
+
+    DBIx::Recordset::Undef ('set1') ;
+
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[0]",
+                                        '!Links'        =>  {
+                                                            'subid' => {
+                                                                '!Table' => $Table[3],
+                                                                '!LinkedField' => 'id',
+								}
+                                                            },
+                                        'id'            =>  2,
+                                            })  or die "not ok ($DBI::errstr)" ;
+
+    Check ([2], $TestFields[0], \@set1_) or print "ok\n" ;
+    printlogf "";
+    Check (['Second item Type 1',          
+            '2.item, new Type 2',
+            'Second item Type 3',
+            'Second item Type 4'], $TestFields[3], $set1_{subid}, 'typ') or print "ok\n" ;
+
+    DBIx::Recordset::Undef ('set1_') ;
+
+    # ---------------------
+    }
+
+    printlogf "Add with sub table";
+    print LOG "\n--------------------\n" ;
+
+    *set1 = DBIx::Recordset -> Setup ({ '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[0]",
+                                        '!Links'        =>  {
+                                                            'subid' => {
+                                                                '!Table' => $Table[3],
+                                                                '!LinkedField' => 'id'
+                                                                }
+                                                            },
+                                            })  or die "not ok ($DBI::errstr)" ;
+
+    $set1 -> Add ;
+    $set1{id}     = 9988 ;
+    $set1{value}  = 998877 ;
+    #$set1{subid}{id}  = 9988;
+    $set1{subid}{typ} = 'Typ for 9988' ;
+    #${$set1{subid}} -> Flush ;
+    
+    AddTestRowAndId (0, {
+                        'id'   => 9988,
+                        'value' => 9988772,
+                        }) ;
+    AddTestRowAndId (3, {
+                        'id'   => 9988,
+                        'typ' => 'Typ for 9988',
+                        }, 'typ') ;
+
+    DBIx::Recordset::Undef ('set1') ;
+
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[0]",
+                                        '!Links'        =>  {
+                                                            'subid' => {
+                                                                '!Table' => $Table[3],
+                                                                '!LinkedField' => 'id'
+                                                                }
+                                                            },
+                                        'id'            =>  9988,
+                                            })  or die "not ok ($DBI::errstr)" ;
+
+    Check ([9988], $TestFields[0], \@set1_) or print "ok\n" ;
+    printlogf "";
+    Check (['Typ for 9988'], $TestFields[3], $set1_{subid}, 'typ') or print "ok\n" ;
+
+    DBIx::Recordset::Undef ('set1_') ;
+
+
+
     #########################################################################################
 
     if ($errors)
@@ -1653,6 +2001,18 @@ use strict ;
 
 
 unlink "test.log" ;
+    
+    open LOG, ">>test.log" or die "Cannot open test.log" ; 
+
+    *DBIx::Recordset::LOG = \*LOG ; 
+    $DBIx::Recordset::Debug = 2 ; 
+
+    open (STDERR, ">&LOG") || die "Cannot redirect stderr" ;  
+    #open (STDERR, ">dbi.log") || die "Cannot redirect stderr" ;  
+    #DBI->trace(2) ;
+    select (STDERR) ; $| = 1 ;
+    select (LOG) ; $| = 1 ;
+    select (STDOUT) ; $| = 1 ;
 
 if ($#ARGV != -1)
     {

@@ -49,6 +49,7 @@ use vars
     $numOpen
 
     %Data
+    %Metadata
     );
 
 use DBI ;
@@ -57,7 +58,7 @@ require Exporter;
 
 @ISA       = qw(Exporter);
 
-$VERSION = '0.16-beta';
+$VERSION = '0.17-beta';
 
 
 $id = 1 ;
@@ -82,6 +83,7 @@ else
 ## SetupDBConnection
 ##
 ## $data_source  = Driver/DB/Host
+##                  or recordset from which the data_source and dbhdl should be taken (optional)
 ## $table        = table (multiple tables must be comma separated)
 ## $username     = Username (optional)
 ## $password     = Password (optional) 
@@ -94,92 +96,139 @@ sub SetupDBConnection($$$;$$\%)
     {
     my ($self, $data_source,  $table, $username, $password, $attr) = @_ ;
 
-    
-    $data_source =~ /^dbi\:(.*?)\:/ ;
-    $self->{'*Driver'}     = $1 ;
-    $self->{'*DataSource'} = $data_source ;
-    $self->{'*Username'}   = $username ;
     $self->{'*Table'}      = $table ;
     $self->{'*Id'}         = $id++ ;
-    
-    my $hdl = $self->{'*DBHdl'}  = DBI->connect($data_source, $username, $password, $attr) or return undef ;
 
-    $numOpen++ ;
-
-    print LOG "DB:  Successfull connect (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'}) ;
-
-    my $sth ;
-    
-    my $ListFields = ($DBIx::Compat::Compat{$self->{'*Driver'}}{ListFields} || $DBIx::Compat::Compat{'*'}{ListFields}) ;    
-    my $QuoteTypes = ($DBIx::Compat::Compat{$self->{'*Driver'}}{QuoteTypes} || $DBIx::Compat::Compat{'*'}{QuoteTypes}) ;    
-    my $HaveTypes  = defined ($DBIx::Compat::Compat{$self->{'*Driver'}}{HaveTypes})?$DBIx::Compat::Compat{$self->{'*Driver'}}{HaveTypes}:$DBIx::Compat::Compat{'*'}{HaveTypes} ;    
-    my @tabs = split (/\s*\,\s*/, $table) ;
-    my $tab ;
-    my %Quote = () ;
-    foreach $tab (@tabs)
+    if (ref ($data_source) eq 'DBIx::Recordset')
+        { # copy from another recordset
+        $self->{'*Driver'}     = $data_source->{'*Driver'} ;   
+        $self->{'*DataSource'} = $data_source->{'*DataSource'} ;
+        $self->{'*Username'}   = $data_source->{'*Username'} ; 
+        $self->{'*DBHdl'}      = $data_source->{'*DBHdl'} ;    
+        $self->{'*DBIAttr'}    = $data_source->{'*DBIAttr'} ;
+        $self->{'*MainHdl'}    = 0 ;
+        }
+    else
         {
-        $sth = &{$ListFields}($hdl, $tab) or die "Cannot list fields for $data_source" ;
+        $self->{'*DataSource'} = $data_source ;
+        $self->{'*Username'}   = $username ;
+        $self->{'*DBIAttr'}    = $attr ;
+        $self->{'*DBHdl'}      = undef ;
+        }
+
     
-        my $types ;
-        my $fields = $sth -> {NAME}  ;
-        my $num = $#{$fields} + 1 ;
+    my $hdl ;
+
+    if (!defined ($self->{'*DBHdl'}))
+        {
+        $hdl = $self->{'*DBHdl'}  = DBI->connect($self->{'*DataSource'}, $self->{'*Username'}, $password, $self->{'*DBIAttr'}) or return undef ;
+
+        $self->{'*MainHdl'}    = 1 ;
+        $self->{'*Driver'}     = $hdl->{Driver}->{Name} ;
+
+        $numOpen++ ;
+
+        print LOG "DB:  Successfull connect (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'}) ;
+        }
+    else
+        {
+        $hdl = $self->{'*DBHdl'} ;
+        print LOG "DB:  Use already open dbh (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'}) ;
+        }
+            
+    my $meta ;
+    my $metakey = "$self->{'*DataSource'}//$self->{'*Table'}" ;
+    
+    if (defined ($meta = $Metadata{$metakey}))
+        {
+        $self->{'*Names'}  = $meta->{'*Names'} ;
+        $self->{'*Types'}  = $meta->{'*Types'} ;
+        $self->{'*Quote'}  = $meta->{'*Quote'} ;
+        print LOG "Use cached metadata for $metakey\n" if ($self->{'*Debug'} > 1) ;
+        }
+    else
+        {
+        my $sth ;
+    
+        my $ListFields = ($DBIx::Compat::Compat{$self->{'*Driver'}}{ListFields} || $DBIx::Compat::Compat{'*'}{ListFields}) ;    
+        my $QuoteTypes = ($DBIx::Compat::Compat{$self->{'*Driver'}}{QuoteTypes} || $DBIx::Compat::Compat{'*'}{QuoteTypes}) ;    
+        my $HaveTypes  = defined ($DBIx::Compat::Compat{$self->{'*Driver'}}{HaveTypes})?$DBIx::Compat::Compat{$self->{'*Driver'}}{HaveTypes}:$DBIx::Compat::Compat{'*'}{HaveTypes} ;    
+        my @tabs = split (/\s*\,\s*/, $table) ;
+        my $tab ;
+        my %Quote = () ;
+        foreach $tab (@tabs)
+            {
+            $sth = &{$ListFields}($hdl, $tab) or die "Cannot list fields for $data_source" ;
+    
+            my $types ;
+            my $fields = $sth -> {NAME}  ;
+            my $num = $#{$fields} + 1 ;
         
-        if ($HaveTypes)
-            {
-            #print LOG "DB: Have Types for driver\n" ;
-            $types = $sth -> {TYPE}  ;
-            }
-        else
-            {
-            #print LOG "DB: No Types for driver\n" ;
-            # Drivers does not have fields types -> give him SQL_VARCHAR
-            my $i ;
-            $types = [] ;
-            for ($i = 0; $i < $num; $i++)
-                { push @$types, DBI::SQL_VARCHAR (); }
-
-            # Setup quoting for SQL_VARCHAR
-            $QuoteTypes = { DBI::SQL_VARCHAR() => 1 } ;
-            }
-        
-        push @{$self->{'*Names'}}, @{ $fields } ;
-        push @{$self->{'*Types'}}, @{ $types } ;
-
-
-        $sth -> finish ;
-
-        # Set up a hash which tells us which fields to quote and which not
-        # We setup two versions, one with tablename and one without
-        my $col ;
-        my $fieldname ;
-        for ($col = 0; $col < $num; $col++ )
-            {
-            if ($self->{'*Debug'})
+            if ($HaveTypes)
                 {
-                my $n = $$fields[$col] ;
-                my $t = $$types[$col] ;
-                print LOG "DB: TAB = $tab, COL = $col, NAME = $n, TYPE = $t" ;
-                }
-            $fieldname = $$fields[$col] ;
-            if ($$QuoteTypes{$$types[$col]})
-                {
-                print LOG " -> quote\n" if ($self->{'*Debug'}) ;
-                $Quote {lc("$tab.$fieldname")} = 1 ;
-                $Quote {lc("$fieldname")} = 1 ;
+                #print LOG "DB: Have Types for driver\n" ;
+                $types = $sth -> {TYPE}  ;
                 }
             else
                 {
-                print LOG "\n" if ($self->{'*Debug'}) ;
-                $Quote {lc("$tab.$fieldname")} = 0 ;
-                $Quote {lc("$fieldname")} = 0 ;
-                }
-            }
-        print LOG "No Fields found for $tab\n" if ($num == 0 && $self->{'*Debug'}) ;
-        }
-    
-    print LOG "No Tables specified\n" if ($#tabs < 0 && $self->{'*Debug'}) ;
+                #print LOG "DB: No Types for driver\n" ;
+                # Drivers does not have fields types -> give him SQL_VARCHAR
+                my $i ;
+                $types = [] ;
+                for ($i = 0; $i < $num; $i++)
+                    { push @$types, DBI::SQL_VARCHAR (); }
 
-    $self->{'*Quote'} = \%Quote ;    
+                # Setup quoting for SQL_VARCHAR
+                $QuoteTypes = { DBI::SQL_VARCHAR() => 1 } ;
+                }
+        
+            push @{$self->{'*Names'}}, @{ $fields } ;
+            push @{$self->{'*Types'}}, @{ $types } ;
+
+
+            $sth -> finish ;
+
+            # Set up a hash which tells us which fields to quote and which not
+            # We setup two versions, one with tablename and one without
+            my $col ;
+            my $fieldname ;
+            for ($col = 0; $col < $num; $col++ )
+                {
+                if ($self->{'*Debug'})
+                    {
+                    my $n = $$fields[$col] ;
+                    my $t = $$types[$col] ;
+                    print LOG "DB: TAB = $tab, COL = $col, NAME = $n, TYPE = $t" ;
+                    }
+                $fieldname = $$fields[$col] ;
+                if ($$QuoteTypes{$$types[$col]})
+                    {
+                    print LOG " -> quote\n" if ($self->{'*Debug'}) ;
+                    $Quote {lc("$tab.$fieldname")} = 1 ;
+                    $Quote {lc("$fieldname")} = 1 ;
+                    }
+                else
+                    {
+                    print LOG "\n" if ($self->{'*Debug'}) ;
+                    $Quote {lc("$tab.$fieldname")} = 0 ;
+                    $Quote {lc("$fieldname")} = 0 ;
+                    }
+                }
+            print LOG "No Fields found for $tab\n" if ($num == 0 && $self->{'*Debug'}) ;
+            }
+    
+        print LOG "No Tables specified\n" if ($#tabs < 0 && $self->{'*Debug'}) ;
+
+        $self->{'*Quote'} = \%Quote ;    
+
+        $meta = {} ;
+        $meta->{'*Names'}  = $self->{'*Names'} ;
+        $meta->{'*Types'}  = $self->{'*Types'} ;
+        $meta->{'*Quote'}  = $self->{'*Quote'} ;
+
+        $Metadata{$metakey} = $meta ;
+        }
+
 
     return $hdl ;
     }
@@ -281,14 +330,19 @@ sub New
 ## Same as New, but parameters passed as hash:
 ##
 ## !DataSource  = Driver/DB/Host
-## !Table       = Tablename, muliply tables are comma separated
+##                or a Recordset object from which to take the DataSource, DBIAttrs and username
 ## !Username    = username
 ## !Password    = password
+## !DBIAttr     = reference to a hash which is passed to the DBI connect method
+##
+## !Table       = Tablename, muliply tables are comma separated
 ## !Fields      = fields which should be return by a query
 ## !TabRelation = condition which describes the relation
 ##                between the given tables
 ## !PrimKey     = name of primary key
 ## !StoreAll	= store all fetched data
+##
+## !Default     = hash with default record data
 ##
 
 sub SetupObject
@@ -296,17 +350,29 @@ sub SetupObject
     {
     my ($class, $parm) = @_ ;
 
-    my $self = New ($class, $$parm{'!DataSource'}, $$parm{'!Table'}, $$parm{'!Username'}, $$parm{'!Password'}) or return undef ; 
+    my $self = New ($class, $$parm{'!DataSource'}, $$parm{'!Table'}, $$parm{'!Username'}, $$parm{'!Password'}, $$parm{'!DBIAttr'}) or return undef ; 
 
     $self->{'*Fields'}      = $$parm{'!Fields'} ;
     $self->{'*TabRelation'} = $$parm{'!TabRelation'} ;
     $self->{'*PrimKey'}     = $$parm{'!PrimKey'} ;
     $self->{'*StoreAll'}    = $$parm{'!StoreAll'} ;
+    $self->{'*Default'}     = $$parm{'!Default'} if (defined ($$parm{'!Default'})) ;
     $Data{$self->{'*Id'}}   = [] ;
     $self->{'*FetchStart'}  = 0 ;
     $self->{'*FetchMax'}    = undef ;
     $self->{'*EOD'}         = undef ;
     $self->{'*CurrRow'}     = 0 ;
+    my $links = $self->{'*Links'}       = $$parm{'!Links'} ;
+    if (defined ($links))
+        {
+        my $k ;
+        my $v ;
+        while (($k, $v) = each (%$links))
+            {
+            $v -> {'!LinkedField'} = $v -> {'!MainField'} if (defined ($v) && !defined ($v -> {'!LinkedField'})) ;
+            $v -> {'!MainField'}   = $v -> {'!LinkedField'} if (defined ($v) && !defined ($v -> {'!MainField'})) ;
+            }
+        }
 
     return $self ;
     }
@@ -407,7 +473,7 @@ sub Disconnect ($)
         undef $self->{'*StHdl'} ;
         }
 
-    if (defined ($self->{'*DBHdl'}))
+    if (defined ($self->{'*DBHdl'}) && $self->{'*MainHdl'})
         {
         $numOpen-- ;
         $self->{'*DBHdl'} -> disconnect () ;
@@ -458,19 +524,24 @@ sub STORE
         print LOG "\n" ;
         }        
     my $r ;
+    my $rec ;
+    $value ||= {} ;
     if (keys %$value)
         {
         my %rowdata ;
         $r = tie %rowdata, 'DBIx::Recordset::Row', $self ;
         %rowdata = %$value ;
-        $Data{$self->{'*Id'}}[$fetch] = \%rowdata ;
+        $rec = $Data{$self->{'*Id'}}[$fetch] = \%rowdata ;
         }
     else
         {
         $r = tie %$value, 'DBIx::Recordset::Row', $self, $value ;
-        $Data{$self->{'*Id'}}[$fetch] = $value ;
+        $rec = $Data{$self->{'*Id'}}[$fetch] = $value ;
+        %$value = %{$self -> {'*Default'}} if (exists ($self -> {'*Default'})) ;
         }
     $r -> {'*new'} = 1 ;
+
+    return $rec ;
     } 
 
 ## ----------------------------------------------------------------------------
@@ -795,7 +866,7 @@ sub FETCH
 
     my $row = $self->{'*CurrRow'} ;     # row next to fetch from db
     my $sth = $self->{'*StHdl'} ;       # statement handle
-    my $data = $Data{$self->{'*Id'}} ;  # data storage (Data is stored in a speperate hash to avoid circular references)
+    my $data = $Data{$self->{'*Id'}} ;  # data storage (Data is stored in a seperate hash to avoid circular references)
 
     if ($row <= $fetch && !$self->{'*EOD'} && defined ($sth))
         {
@@ -841,14 +912,14 @@ sub FETCH
 
 
         $self->{'*LastRow'}   = $row ;
-        if ($row == $fetch)
+        if ($row == $fetch && !$self->{'*EOD'})
     	    {
             
     	    $arr = $sth -> fetchrow_arrayref () ;
-            $row++ ;
             
             if ($arr)
                 {
+                $row++ ;
                 $dat = {} ;
                 my $obj = tie %$dat, 'DBIx::Recordset::Row', $self, $fld, $arr ;
                 
@@ -914,9 +985,13 @@ sub FETCH
 ## position the record pointer to the first row and return it
 ##
 
-sub First ($)
+sub First ($;$)
     {
-    return $_[0] -> FETCH (0) ;
+    my $rec = $_[0] -> FETCH (0) ;
+    return $rec if (defined ($rec) || !$_[1]) ;
+
+    # create new record 
+    return $_[0] -> STORE (0) ;
     }
 
 
@@ -944,9 +1019,14 @@ sub Last ($)
 ## position the record pointer to the next row and return it
 ##
 
-sub Next ($)
+sub Next ($;$)
     {
-    return $_[0] -> FETCH ($_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'} + 1) ;
+    my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'} + 1 ;
+    my $rec = $_[0] -> FETCH ($n) ;
+    return $rec if (defined ($rec) || !$_[1]) ;
+
+    # create new record 
+    return $_[0] -> STORE ($n) ;
     }
 
 
@@ -970,9 +1050,14 @@ sub Prev ($)
 ##
 
 
-sub Curr ($)
+sub Curr ($;$)
     {
-    return $_[0] -> FETCH ($_[0] ->{'*LastRow'}) ;
+    my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'} ;
+    my $rec = $_[0] -> FETCH ($n) ;
+    return $rec if (defined ($rec) || !$_[1]) ;
+
+    # create new record 
+    return $_[0] -> STORE ($n) ;
     }
 
 
@@ -1264,6 +1349,7 @@ sub Flush
     my $dat ;
     my $obj ;
     my $data = $Data{$self->{'*Id'}} ;
+    my $rc = 1 ;
 
     foreach $dat (@$data)
 	{
@@ -1276,7 +1362,7 @@ sub Flush
             
             #Devel::Peek::Dump ($obj -> {'*Recordset'}, 1) ;
             
-            $obj -> Flush () ;
+            $obj -> Flush () or $rc = undef ;
             $obj -> {'*Recordset'} = undef if ($release) ;
             }
 
@@ -1296,6 +1382,7 @@ sub Flush
 
 	}
 
+    return $rc ;
     }
 
 
@@ -1636,6 +1723,42 @@ sub Execute ($\%)
 
 ## ----------------------------------------------------------------------------
 ##
+## PushCurrRec
+##
+
+sub PushCurrRec
+
+    {
+    my ($self) = @_ ;
+
+    # Save Current Record
+    my $sp = $self->{'*CurrRecStack'} ;
+    push @$sp, $self->{'*LastRow'} ;
+    push @$sp, $self->{'*LastKey'} ;
+    push @$sp, $self->{'*FetchMax'} ;
+    }
+
+
+
+## ----------------------------------------------------------------------------
+##
+## PopCurrRec
+##
+
+sub PopCurrRec
+
+    {
+    my ($self) = @_ ;
+
+    #Restore pointers
+    my $sp = $self->{'*CurrRecStack'} ;
+    $self->{'*FetchMax'} = pop @$sp  ;
+    $self->{'*LastKey'}  = pop @$sp  ;
+    $self->{'*LastRow'}  = pop @$sp  ;
+    }
+
+## ----------------------------------------------------------------------------
+##
 ## MoreRecords
 ##
 
@@ -1644,22 +1767,11 @@ sub MoreRecords
     {
     my ($self, $ignoremax) = @_ ;
 
-    # Save Current Record
-    my $LastRow  = $self->{'*LastRow'} ;
-    my $LastKey  = $self->{'*LastKey'} ;
-    my $FetchMax = $self->{'*FetchMax'} ;
-    my $EOD      = $self->{'*EOD'} ;
-    $self->{'*FetchMax'} = undef if ($ignoremax) ;
-    $self->{'*EOD'}      = undef if ($ignoremax) ;
-
+    $self -> PushCurrRec ;
 
     my $more = $self -> Next () ;
 
-    #Restore pointers
-    $self->{'*LastRow'}  = $LastRow ;
-    $self->{'*LastKey'}  = $LastKey ;
-    $self->{'*FetchMax'} = $FetchMax ;
-    $self->{'*EOD'}      = $EOD ;
+    $self -> PopCurrRec ;
 
     return $more ;
     }
@@ -1779,17 +1891,54 @@ sub TIEHASH
 ##
 
 
-sub FETCH ($)
+sub FETCH ()
     {
-    return $_[0] -> {'*Recordset'} -> Curr -> {$_[1]} ;
+    if (wantarray)
+        {
+        my @result ;
+        my $rs = $_[0] -> {'*Recordset'} ;
+        $rs -> PushCurrRec ;
+        my $rec = $rs -> First () ;
+        while ($rec)
+            {
+            push @result, tied (%$rec) -> FETCH ($_[1]) ;
+            $rec = $rs -> Next () ;
+            }
+        $rs -> PopCurrRec ;
+        return @result ;
+        }
+    else
+        {
+        my $rec = $_[0] -> {'*Recordset'} -> Curr ;
+        return tied (%$rec) -> FETCH ($_[1]) if (defined ($rec)) ;
+        return undef ;
+        }
     }
 
 
 ## ----------------------------------------------------------------------------
 
-sub STORE ($)
+sub STORE ()
     {
-    $_[0] -> {'*Recordset'} -> Curr -> {$_[1]} = $_[2] ;
+    if (ref $_[2])
+        { # array
+        my ($self, $key, $dat) = @_ ;
+        my $rs = $self -> {'*Recordset'} ;
+        $rs -> PushCurrRec ;
+        my $rec = $rs -> First (1) ;
+        my $i = 0 ;
+        while ($rec)
+            {
+            tied (%$rec) -> STORE ($key, $$dat[$i++]) ;
+            last if ($i > $#$dat) ;
+            $rec = $rs -> Next (1) ;
+            }
+        $rs -> PopCurrRec ;
+        }
+    else
+        {
+        tied (%{$_[0] -> {'*Recordset'} -> Curr (1)}) -> STORE ($_[1], $_[2]) ;
+        }
     }
 
 
@@ -2126,8 +2275,25 @@ sub FETCH
     {
     return undef if (!$_[1]) ;
     my $rs    = $_[0] -> {'*Recordset'} ;  
-    print DBIx::Recordset::LOG "DB:  Row::FETCH $_[1] = <" .$_[0]->{"=$_[1]"} . "\n" if ($rs->{'*Debug'} > 1) ;
-    return $_[0]->{'*data'}{$_[1]} ;
+    my $data = $_[0]->{'*data'}{$_[1]} ;
+    my $link ;
+    if (!defined($data) && defined ($link = $rs -> {'*Links'}{$_[1]}))
+        {
+        my $lf = $link -> {'!LinkedField'} ;
+        my $mv = $_[0]->{'*data'}{$link -> {'!MainField'}} ;
+        $link -> {$lf} = $mv ;
+        $link -> {'!Default'} = { $lf => $mv } ;
+        $link -> {'!DataSource'} = $rs if (!defined ($link -> {'!DataSource'})) ;
+        $data = $_[0]->{'*data'}{$_[1]} = DBIx::Recordset -> Search ($link) ;
+        delete $link -> {'!Recordset'} if (ref ($link -> {'!DataSource'})) ; # avoid backlinks
+        print DBIx::Recordset::LOG "DB:  Row::FETCH $_[1] = Setup New Recordset for table $link->{'!Table'}, $lf= <$mv>\n" if ($rs->{'*Debug'} > 1) ;
+        }
+    else
+        {
+        print DBIx::Recordset::LOG "DB:  Row::FETCH $_[1] = <" . $data . ">\n" if ($rs->{'*Debug'} > 1) ;
+        }
+    
+    return $data ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -2183,14 +2349,14 @@ sub Flush
     my $rs    = $self -> {'*Recordset'} ;  
     
     #print DBIx::Recordset::LOG "DB:  Row::Flush rs=$rs dirty=$self->{'*dirty'}\n" ;
-    return if (!$self -> {'*dirty'} || !$rs) ;
+    return 1 if (!$self -> {'*dirty'} || !$rs) ;
 
     print DBIx::Recordset::LOG "DB:  Row::Flush\n" if ($rs->{'*Debug'} > 1) ;
 
     my $dat = $self -> {'*upd'} ;
     if ($self -> {'*new'})
         {
-        $rs -> Insert ($dat) ;
+        $rs -> Insert ($dat) or return undef ;
         }
     else
         {
@@ -2200,20 +2366,29 @@ sub Flush
         #carp ("Need primary key to update record") if (!exists($self -> {"=$pk"})) ;
         if (!exists($self -> {'*PrimKeyOrgValue'})) 
             {
-            $rs -> Update ($dat) ;
+            $rs -> Update ($dat)  or return undef ;
             }
         elsif (ref ($pko = $self -> {'*PrimKeyOrgValue'}) eq 'HASH')
             {
-            $rs -> Update ($dat, $pko) ;
+            $rs -> Update ($dat, $pko)  or return undef ;
             }
         else
             {
-            $rs -> Update ($dat, {$pk => $pko} ) ;
+            $rs -> Update ($dat, {$pk => $pko} )  or return undef ;
             }
         }
     delete $self -> {'*new'} ;
     delete $self -> {'*dirty'} ;
     $self -> {'*upd'} = {} ;
+
+    my $k ;
+    my $v ;
+    while (($k, $v) = each (%{$rs -> {'*Links'}}))
+        { # Flush linked tables
+        ${$self->{'*data'}{$k}} -> Flush () if (defined ($self->{'*data'}{$k})) ;
+        }
+
+    return 1 ;
     }
 
 
@@ -2309,6 +2484,11 @@ Username. Same as the second parameter to the DBI connect function.
 
 Password. Same as the third parameter to the DBI connect function.
 
+=item B<!DBIAttr>
+
+Reference to a hash which holds the attributes for the DBI connect
+function. See perldoc DBI for a detailed description.
+
 =item B<!Fields>
 
 Fields which should be returned by a query. If you have specified multiple
@@ -2358,6 +2538,31 @@ record. If you set this parameter to true the hash will by tied to the whole
 database, this means that the key of the hash will be used as primary key in
 the table to select one row. (This parameter has only an effect on functions
 which return a typglob)
+
+=item B<!Links>
+
+This parameter can be used to link multiple tables together. It takes a
+reference to a hash, which has as keys names for a special B<"linkfield">
+and as value a paramter hash. The paramter hash can contain all the
+B<Setup paramters>. The setup paramters are taken to construct a new
+recordset object to access the linked table. If !DataSource is omitted (what
+it should normaly), the same DataSource (and database handle), as the
+main object is taken. There are special paramters which can only be
+occur in a link definition (see next paragraph). For a detail description
+how links are handled see "Accessing mulitple Tables" below.
+
+=head2 Link Parameters
+
+=item B<!MainField>
+
+The B<!MailField> parameter holds a fieldname which is used to retrive
+a key value for the search in the linked table from the main table.
+If obmitted it is set to the same value as B<!LinkedField>.
+
+=item B<!LinkedField>
+
+The fieldname which holds the key value in the linked table.
+If obmitted it is set to the same value as B<!MainField>.
 
 
 =head2 Where Parameters
@@ -2709,6 +2914,15 @@ is located.
   # (without Flush it is written, when the record goes out of scope)
   $set -> Flush () ;
 
+Add will also set the current record to the newly created empty
+record. So you can assign the data by simply using the current record.
+
+  # Add an empty record
+  $set -> Add () ;
+  # Now assign some data to the new record
+  $set{id} = 5 ;
+  $set{name} = 'test' ;
+
 
 =item B<$set -E<gt> MoreRecords ([$ignoremax])>
 
@@ -2797,7 +3011,7 @@ accessed anymore, unless you specify the B<!StoreAll> parameter.
 2.) DBIx::Recordset holds a B<currecnt record> which can be accessed directly via
 a hash. The current record is the one you last access via the array. After
 a Select or Search it's reset to the first record. You can change the current
-record via the methods B<Next>, B<Prev>, B<First>.
+record via the methods B<Next>, B<Prev>, B<First>, B<Add>.
 
 Example:
  $set{id}	    access the field 'id' of the current record
@@ -2828,7 +3042,7 @@ Example:
 				     'name'    => 'xyz'}) ;
 
   #now you can update an existing record by assigning new values
-  #Note: you must have specified a PrimKey for update to work
+  #Note: if possible specify a PrimKey for update to work faster
   $set[0]{'name'} = 'zyx' ;
 
   # or insert a new record by setting up an new array row
@@ -2840,6 +3054,12 @@ Example:
   my $i = $set -> Add () ;
   $set[$i]{'name'} = 'more foo' ;
   $set[$i]{'id'}   = 11 ;
+
+  # or add an empty record via Add and assign the values to the current
+  # reocord
+  $set -> Add () ;
+  $set{'name'} = 'more foo' ;
+  $set{'id'}   = 11 ;
 
   # or insert the data directly via Add
   $set -> Add ({'name' => 'even more foo',
@@ -2853,6 +3073,107 @@ Example:
 IMPORTANT: The data is not written to the database until you explicitly
 call B<flush>, an new query is started or the object is destroyed. This will
 keep the actual writes to the database to a minimum.
+
+=head1 WORKING WITH MULTIPLE TABLES
+
+DBIx::Recordset has some nice features to make working with multiple tables
+and their relationen easier. First of all you can specify more then one
+table to the B<!Table> parameter. If you do so you need to specifiy how both
+tables are related. You do this with B<!TabRelation> parameter. This method
+will access all the specified tables simultanouly.
+
+=head2	Example:
+
+If you have the following two tables, where the field streetid is an
+pointer into the table street:
+
+  table name
+  name	    char (30),
+  streetid  integer
+
+  table street
+  id	    integer,
+  street    char (30)
+
+You can perform the following search:
+
+  *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:drv:db',
+		     '!Table'	   => 'name, street',
+		     '!TabRelation'=> 'name.streetid = street.id'}) ;
+
+The result is that you get a set which contains the fields B<name>, B<streetid>,
+B<street> and B<id>, where id is always equal to streetid. If there are multiple
+streets for one name, you will get as much records for that name as streets
+present for it. For this reason this aproach works best when you have an
+1:1 relation.
+If you have 1:n relations between two tables the following may be a better
+way to handle it:
+
+  *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:drv:db',
+		     '!Table'	   => 'name',
+		     '!Links'	   => {
+			streetlink => {
+			    '!Table' => 'street',
+			    '!LinkedField' => 'id',
+			    '!MainField'   => 'streetid'
+			    }
+			}
+		    }) ;
+
+After that query every record will contain the fields B<name> and B<streetid>.
+Additionaly there is a pseudofield named B<streetlink>, which could be
+used to access another recordset object, which is the result of an query
+where B<streetid = id>. Use
+
+  $set{name} to access the name field
+  $set{streetlink}{street} to access the first street (as long as the
+				    current record of the subobject isn't
+				    modified)
+
+  $set{streetlink}[0]{street}	first street
+  $set{streetlink}[1]{street}	second street
+  $set{streetlink}[2]{street}	third street
+
+  $set[2]{streetlink}[1]{street} to access the second street of the
+				    thrid name
+
+You can have multiple linked tables in one recordset, also you can nest
+linked tables or can link a table to itself.
+
+
+=head1 DEBUGING
+
+DBIx::Recordset is able to write a logfile, so you can see what's happening
+inside. There are two public variables use for this purpose:
+
+=over 4
+
+=item $DBIx::Recordset::Debug
+
+Debuglevel 
+ 0 = off
+ 1 = some infos (mainly the SQL Statements)
+ 2 = much infos
+
+=item DBIx::Recordset::LOG
+
+Filehandle which is used for logging. Default is STDERR, if you running under
+HTML::Embperl the default is the Embperl logfile.
+
+=back
+
+ Example:
+
+    # open the log file
+    open LOG, "test.log" or die "Cannot open test.log" ; 
+
+    # assign filehandle
+    *DBIx::Recordset::LOG = \*LOG ; 
+    
+    # set debugging level
+    $DBIx::Recordset::Debug = 2 ; 
+
+    # now you can create a new DBIx::Recordset object
 
 
 
@@ -2918,12 +3239,14 @@ of the various DBD drivers. Currently there are definitions for:
 
 =item B<DBD::ODBC>
 
+=item B<DBD::CSV>
 
 DBIx::Recordset has been tested with all those DBD drivers (on linux 2.0.32, execpt DBD::ODBC
 which has been tested on Windows '95 using Access 7).
 
 
-If you want to use another DBD driver with DBIx::Recordset, it may neccesary to create
+If you want to use another DBD driver with DBIx::Recordset, it may
+neccesary to create
 an entry for that driver. See B<perldoc DBIx::Compat> for more information.
 
 
@@ -3197,8 +3520,8 @@ Name)) or (  (  id > 6 and addon <> 6)  or  (  id > 0 and addon <> 0))) ;
 
 =head1 SUPPORT
 
-As far as possible for me support will be available directly from me or via the
-DBI Users mailing list.
+As far as possible for me support will be available via the
+DBI Users mailing list. (dbi-user@fugue.com)
 
 =head1 AUTHOR
 
@@ -3210,10 +3533,9 @@ G.Richter (richter@dev.ecos.de)
 =item DBI(3)
 =item DBIx::Compat(3)
 =item HTML::Embperl(3) 
-http://perl.apache.org/embperl.html
+http://perl.apache.org/embperl/
 =item Tie::DBI(3)
 http://stein.cshl.org/~lstein/Tie-DBI/
 
 
 =cut
-
