@@ -1,0 +1,12 @@
+Changes
+MANIFEST
+Makefile.PL
+test.pl
+Recordset.pm
+Compat.pm
+README
+TODO
+eg/README
+eg/search.pl
+eg/search.htm
+

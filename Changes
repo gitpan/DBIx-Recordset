@@ -1,0 +1,32 @@
+Revision history for Perl extension DBIx::Recordset
+
+0.16  26 Aug 1998
+  - Reworked memory management
+    1.) DBIx::Recordset will be correctly destroyed and the statement handles 
+        released, if the object goes out of scope. (You don't need 
+        DBIx::Recordset::Undef anymore to destroy an object)
+    2.) Worked around a problem that perl will reference an object when a
+        reference to it is return from the each operator. This causes reference count
+        of the object not going to zero and therfore the object was not destroyed
+        when it goes out of scope.
+
+  - Ignore DBD::File for tests because it's just a base class
+  - Added support for drivers which does not have field types 
+    ($sth -> {TYPE})
+  - Fixed return values from Select/Update/Insert/Search/Execute so
+    they return undef on error. Spotted by Gary Ashton-Jones.
+  - Documentation update
+
+0.15  31 Jul 1998
+  - Apdapt STORE method of tied array to perl5.005. DBIx::Recordset works
+    now correctly with perl5.004 and perl5.005
+  - Update can now handle updates of the primary keys correctly
+  - Insert can be done by calling Setup and then write values to the
+    array
+  - Update works now without an primary key
+  - Adapted Compat.pm to the new values in $sth -> {TYPE} of DBD::mSQL
+    in 1.19_19 and higher. Spotted by Ray Zimmerman,
+
+0.14  1 May 1998  
+  - first public release
+

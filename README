@@ -1,0 +1,97 @@
+
+DBIx::Recordset - Perl extension for DBI recordsets
+
+Copyright (c) 1997-1998 Gerald Richter / ECOS
+
+You may distribute under the terms of either the GNU General Public 
+License or the Artistic License, as specified in the Perl README file.
+For use with Apache httpd and mod_perl, see also Apache copyright.
+
+THIS IS BETA SOFTWARE!
+
+THIS PACKAGE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR IMPLIED 
+WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF 
+MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+
+
+OVERVIEW
+
+DBIx::Recordset is a perl module, which should make it easier to access a set
+of records in a database.
+It should make standard database access (select/insert/update/delete)
+easier to handle (e.g. web application or scripts to enter/retrieve
+data to/from a database). Special attention is made on web applications to make
+it possible to handle the state-less access and to process the posted data
+of formfields.
+The programmer only has to supply the absolutely necessary information, the
+rest is done by DBIx::Recordset.
+
+You can access (read and write) the database (or a selected subset) as an
+array or you can access it as a hash, where the hashkey is the primary key
+of the databasetable. (like Lincoln Stein's Tie::DBI http://stein.cshl.org/~lstein/Tie-DBI/).
+A record is represented as a hash, which contains one entry per field.
+
+DBIx::Recordset use the DBI API to access the database, so it should work with
+every database for which a DBD driver is available (see also DBIx::Compat)
+
+
+For more information look at perldoc DBIx::Recordset.
+
+NOTE 1: This is the first public release, so some features and
+        performance optimisations are still outstanding.
+
+NOTE 2: For use with HTML::Embperl you need version 0.27-beta or higher
+
+INSTALLATION
+
+As usual start with
+
+perl Makefile.PL
+
+The makefile tries to detecd your installed DBD drivers and asks you
+for a database for performing the tests. The database must exist before
+the make test can run!
+
+Now you are ready todo a
+
+make
+
+and
+
+make test
+
+if make test runs ok, do a make install and you are ready. If not you should
+check if a entry for your DBD driver exists in the file Compat.pm.
+If not create one. For more information how todo this look at
+
+perldoc Compat
+
+Currently there are entries for
+- DBD::mSQL
+- DBD::mysql
+- DBD::Pg
+- DBD::Solid
+- DBD::ODBC
+
+If you create your own entry please send it to me, so I can include it
+in the next release.
+
+After changing the Compat.pm rerun make test to make sure it works!
+
+If you don't get make test to work for you, please send me the file
+test.log (Normaly it should be enought to send the part for the test,
+that fails) along with the versions of DBI and the DBD driver you are using.
+
+
+EXAMPLES
+
+The perldoc DBIx::Recordset contains a lot of examples for function calls.
+The directory eg/ contains examples for HTML::Embperl and CGI.pm
+Also you can look at test.pl, which should use most aspects of DBIx::Recordset
+
+
+
+SUPPORT
+
+As far as possible for me, support will be available directly from me or via the
+DBI Users mailinglist.

@@ -1,0 +1,9 @@
+
+- Add push, pop, shift, unshift for result array (only available in perl5.005)
+
+- Add persitent storeing of metadata
+
+- Recheck selected values before UPDATE
+
+- Support cursors, to fetech only those data which is absolutly necessary
+
