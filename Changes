@@ -1,5 +1,10 @@
 Revision history for Perl extension DBIx::Recordset
 
+0.23  22. Sept 2000
+
+  - separated DBIx base classes in different files, so they are visible and
+    searchable by CPAN
+
 0.22  22. Sept 2000
 
   - Fixed a problem that !PrimKey was not correctly set when

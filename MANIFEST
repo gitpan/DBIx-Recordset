@@ -3,6 +3,7 @@ MANIFEST
 Makefile.PL
 test.pl
 Recordset.pm
+Database.pm
 Compat.pm
 README
 TODO
