@@ -514,7 +514,7 @@ sub GetItem
 	}
       else
 	{
-	    cluck "returning default for $name on driver $driver";
+#	    cluck "returning default for $name on driver $driver";
 	    $return =  $Compat{'*'}{$name} ; 
 	}
   }

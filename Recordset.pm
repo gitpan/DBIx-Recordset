@@ -69,7 +69,7 @@ require Exporter;
 
 @ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.25';
+$VERSION = '0.25a';
 
 
 $PreserveCase = 0 ;
@@ -1376,7 +1376,7 @@ sub SQLSelect ($;$$$$$$$)
             #$sth -> bind_param ($i+1, $bind_values -> [$i], $bind_types -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef) ;
 	    my $bt = $bind_types -> [$i] ;
 	    my @bind_param = ($i+1, $bind_values -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE => $bt}:undef ) ;
-	    warn Dumper(\@bind_param);
+#	    warn Dumper(\@bind_param);
             $sth -> bind_param (@bind_param);
             }
         $rc = $sth -> execute  ;

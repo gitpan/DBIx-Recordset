@@ -1,3 +1,7 @@
+2004-01-20  U-MOKSHA\metaperl  <metaperl@urth.org>
+
+	* removed a debugging cluck() call. this creates version 0.25a for
+	CPAN.
 
 0.25
 2003-12-07  U-MOKSHA\metaperl  <metaperl@urth.org>
