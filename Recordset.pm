@@ -1,11 +1,10 @@
 
 ###################################################################################
 #
-#   DBIx::Recordset - Copyright (c) 1997-1998 Gerald Richter / ECOS
+#   DBIx::Recordset - Copyright (c) 1997-2000 Gerald Richter / ECOS
 #
 #   You may distribute under the terms of either the GNU General Public
 #   License or the Artistic License, as specified in the Perl README file.
-#   For use with Apache httpd and mod_perl, see also Apache copyright.
 #
 #   THIS IS BETA SOFTWARE!
 #
@@ -13,14 +12,486 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
+#   $Id: Recordset.pm,v 1.34 2000/01/06 20:09:17 richter Exp $
+#
 ###################################################################################
 
+
+package DBIx::Database::Base ;
+
+use strict 'vars' ;
+
+use vars qw{$LastErr $LastErrstr *LastErr *LastErrstr *LastError $PreserveCase} ;
+
+*LastErr        = \$DBIx::Recordset::LastErr ;
+*LastErrstr     = \$DBIx::Recordset::LastErrstr ;
+*LastError      = \&DBIx::Recordset::LastError ;
+*PreserveCase   = \$DBIx::Recordset::PreserveCase;
+
+
+use Carp ;
+
+## ----------------------------------------------------------------------------
+##
+## savecroak
+##
+## croaks and save error
+##
+
+
+sub savecroak
+
+    {
+    my ($self, $msg, $code) = @_ ;
+
+    $LastErr	= $self->{'*LastErr'}	    = $code || $dbi::err || -1 ;
+    $LastErrstr = $self->{'*LastErrstr'}    = $msg || $DBI::errstr || ("croak from " . caller) ;
+
+    Carp::croak $msg ;
+    }
+
+## ----------------------------------------------------------------------------
+##
+## DoOnConnect
+##
+## in $cmd  sql cmds
+##
+
+sub DoOnConnect
+
+    {
+    my ($self, $cmd) = @_ ;
+    
+    if ($cmd)
+        {
+        if (ref ($cmd) eq 'ARRAY')
+            {
+            foreach (@$cmd)
+                {
+                $self -> do ($_) ;
+                }
+            }
+        elsif (ref ($cmd) eq 'HASH')
+            {
+            $self -> DoOnConnect ($cmd -> {'*'}) ;
+            $self -> DoOnConnect ($cmd -> {$self -> {'*Driver'}}) ;
+            }
+        else
+            {
+            $self -> do ($cmd) ;
+            }
+        }
+    }
+  
+
+## ----------------------------------------------------------------------------
+##
+## DBHdl
+##
+## return DBI database handle
+##
+
+sub DBHdl ($)
+
+    {
+    return $_[0] -> {'*DBHdl'} ;
+    }
+
+
+## ----------------------------------------------------------------------------
+##
+## do an non select statement 
+##
+## $statement = statement to do
+## \%attr     = attribs (optional)
+## @bind_valus= values to bind (optional)
+## or 
+## \@bind_valus= values to bind (optional)
+## \@bind_types  = data types of bind_values
+##
+
+sub do($$;$$$)
+
+    {
+    my($self, $statement, $attribs, @params) = @_;
+    
+    $self -> {'*LastSQLStatement'} = $statement ;
+
+    my $ret ;
+    my $bval ;
+    my $btype ;
+    my $dbh ;
+    my $sth ;
+
+    if (@params > 1 && ref ($bval = $params[0]) eq 'ARRAY' && ref ($btype = $params[1]) eq 'ARRAY')
+        {
+        print DBIx::Recordset::LOG "DB:  do '$statement' bind_values=<@$bval> bind_types=<@$btype>\n" if ($self->{'*Debug'} > 1) ;
+        $dbh = $self->{'*DBHdl'} ;
+        $sth = $dbh -> prepare ($statement, $attribs) ;
+        my $Numeric = $self->{'*NumericTypes'} || {} ;
+        local $^W = 0 ; # avoid warnings
+        if (defined ($sth))
+            {
+            for (my $i = 0 ; $i < @$bval; $i++)
+                {
+                $bval -> [$i] += 0 if (defined ($bval -> [$i]) && $Numeric -> {$btype -> [$i]}) ;
+                #$sth -> bind_param ($i+1, $bval -> [$i], $btype -> [$i]) ;
+                $sth -> bind_param ($i+1, $bval -> [$i], $btype -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef ) ;
+                }
+            $ret = $sth -> execute ;
+            }
+        }
+    else
+        {
+        print DBIx::Recordset::LOG "DB:  do $statement <@params>\n" if ($self->{'*Debug'} > 1) ;
+        
+        $ret = $self->{'*DBHdl'} -> do ($statement, $attribs, @params) ;
+        }
+
+    print DBIx::Recordset::LOG "DB:  do returned $ret\n" if ($self->{'*Debug'} > 2) ;
+    print DBIx::Recordset::LOG "DB:  ERROR $DBI::errstr\n"  if (!$ret && $self->{'*Debug'}) ;
+    print DBIx::Recordset::LOG "DB:  in do $statement <@params>\n" if (!$ret && $self->{'*Debug'} == 1) ;
+
+    $LastErr	= $self->{'*LastErr'}	    = $DBI::err ;
+    $LastErrstr = $self->{'*LastErrstr'}    = $DBI::errstr ;
+    
+    return $ret ;
+    }
+
+
+## ----------------------------------------------------------------------------
+##
+## QueryMetaData
+##
+## $table        = table (multiple tables must be comma separated)
+##
+
+
+sub QueryMetaData($$)
+
+    {
+    my ($self, $table) = @_ ;
+            
+    $table = lc($table)  if (!$PreserveCase) ;
+
+    my $meta ;
+    my $metakey    = "$self->{'*DataSource'}//" . $table ;
+    
+    if (defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
+        {
+        print DBIx::Recordset::LOG "DB:   use cached meta data for $table\n" if ($self->{'*Debug'} > 2) ;
+        return $meta 
+        }
+
+    my $hdl = $self->{'*DBHdl'} ;
+    my $drv = $self->{'*Driver'} ;
+    my $sth ;
+    
+    my $ListFields = DBIx::Compat::GetItem ($drv, 'ListFields') ;
+    my $QuoteTypes = DBIx::Compat::GetItem ($drv, 'QuoteTypes') ;
+    my $NumericTypes = DBIx::Compat::GetItem ($drv, 'NumericTypes') ;
+    my $HaveTypes  = DBIx::Compat::GetItem ($drv, 'HaveTypes') ;
+    my @tabs = split (/\s*\,\s*/, $table) ;
+    my $tab ;
+    my $ltab ;
+    my %Quote ;
+    my %Numeric ;
+    my @Names ;
+    my @Types ;
+    my @FullNames ;
+    my %Table4Field ;
+    my %Type4Field ;
+    my $i ;
+
+    foreach $tab (@tabs)
+        {
+        $sth = &{$ListFields}($hdl, $tab) or $self -> savecroak ("Cannot list fields for $tab ($DBI::errstr)") ;
+	$ltab = $tab ;
+	
+        my $types ;
+        my $fields = $sth -> {($PreserveCase?'NAME':'NAME_lc')}  ;
+        my $num = $#{$fields} + 1 ;
+    
+        if ($HaveTypes)
+            {
+            #print DBIx::Recordset::LOG "DB: Have Types for driver\n" ;
+            $types = $sth -> {TYPE}  ;
+            }
+        else
+            {
+            #print DBIx::Recordset::LOG "DB: No Types for driver\n" ;
+            # Drivers does not have fields types -> give him SQL_VARCHAR
+            $types = [] ;
+            for ($i = 0; $i < $num; $i++)
+                { push @$types, DBI::SQL_VARCHAR (); }
+
+            # Setup quoting for SQL_VARCHAR
+            $QuoteTypes = { DBI::SQL_VARCHAR() => 1 } ;
+            $NumericTypes = { } ;
+            }
+    
+        push @Names, @$fields ;
+        push @Types, @$types ;
+        $i = 0 ;
+        foreach (@$fields)
+            {
+	    $Table4Field{$_}         = $ltab ;        
+            $Table4Field{"$ltab.$_"} = $ltab ;
+            $Type4Field{"$_"}        = $types -> [$i] ;
+            $Type4Field{"$ltab.$_"}  = $types -> [$i++] ;
+            push @FullNames, "$ltab.$_"  ;
+            }        
+
+        $sth -> finish ;
+
+        # Set up a hash which tells us which fields to quote and which not
+        # We setup two versions, one with tablename and one without
+        my $col ;
+        my $fieldname ;
+        for ($col = 0; $col < $num; $col++ )
+            {
+            if ($self->{'*Debug'} > 2)
+                {
+                my $n = $$fields[$col] ;
+                my $t = $$types[$col] ;
+                print DBIx::Recordset::LOG "DB: TAB = $tab, COL = $col, NAME = $n, TYPE = $t" ;
+                }
+            $fieldname = $$fields[$col] ;
+            if ($$QuoteTypes{$$types[$col]})
+                {
+                #print DBIx::Recordset::LOG " -> quote\n" if ($self->{'*Debug'} > 2) ;
+                $Quote {"$tab.$fieldname"} = 1 ;
+                $Quote {"$fieldname"} = 1 ;
+                }
+            else
+                {
+                #print DBIx::Recordset::LOG "\n" if ($self->{'*Debug'} > 2) ;
+                $Quote {"$tab.$fieldname"} = 0 ;
+                $Quote {"$fieldname"} = 0 ;
+                }
+            if ($$NumericTypes{$$types[$col]})
+                {
+                print DBIx::Recordset::LOG " -> numeric\n" if ($self->{'*Debug'} > 2) ;
+                $Numeric {"$tab.$fieldname"} = 1 ;
+                $Numeric {"$fieldname"} = 1 ;
+                }
+            else
+                {
+                print DBIx::Recordset::LOG "\n" if ($self->{'*Debug'} > 2) ;
+                $Numeric {"$tab.$fieldname"} = 0 ;
+                $Numeric {"$fieldname"} = 0 ;
+                }
+            }
+        print DBIx::Recordset::LOG "No Fields found for $tab\n" if ($num == 0 && $self->{'*Debug'} > 1) ;
+        }
+
+    print DBIx::Recordset::LOG "No Tables specified\n" if ($#tabs < 0 && $self->{'*Debug'} > 1) ;
+
+
+    $meta = {} ;
+    $meta->{'*Table4Field'}  = \%Table4Field ;
+    $meta->{'*Type4Field'}   = \%Type4Field ;
+    $meta->{'*FullNames'}    = \@FullNames ;
+    $meta->{'*Names'}  = \@Names ;
+    $meta->{'*Types'}  = \@Types ;
+    $meta->{'*Quote'}  = \%Quote ;    
+    $meta->{'*Numeric'}  = \%Numeric ;    
+    $meta->{'*NumericTypes'}  = $NumericTypes ;    
+
+    $DBIx::Recordset::Metadata{$metakey} = $meta ;
+    
+
+    if (!exists ($meta -> {'*Links'}))
+        { 
+        my $ltab ;
+        my $lfield ;
+        my $metakey ;
+        my $subnames ;
+        my $n ;
+
+        $meta -> {'*Links'} = {} ;
+
+        my $metakeydsn = "$self->{'*DataSource'}//-" ;
+        my $metakeydsntf = "$self->{'*DataSource'}//-"  . ($self->{'*TableFilter'}||'');
+        my $metadsn    = $DBIx::Recordset::Metadata{$metakeydsn} || {} ;
+        my $tabmetadsn = $DBIx::Recordset::Metadata{$metakeydsntf} || {} ;
+        my $tables     = $tabmetadsn -> {'*Tables'} ;
+
+        if (!$tables)
+            { # Query the driver, which tables are available
+            my $ListTables = DBIx::Compat::GetItem ($drv, 'ListTables') ;
+
+	    if ($ListTables)
+		{            
+		my @tabs = &{$ListTables}($hdl) or $self -> savecroak ("Cannot list tables for $self->{'*DataSource'} ($DBI::errstr)") ;
+		my @stab ;
+		my $stab ;
+                my $tabfilter = $self -> {'*TableFilter'} || '.' ;
+                foreach (@tabs)
+                    {
+                    if ($_ =~ /$tabfilter/i)
+                        {
+                        @stab = split (/\./);
+                        $stab = $PreserveCase?(pop @stab):lc (pop @stab) ;
+                        $tables -> {$stab} =  $_ ;
+                        }
+                    }
+		$tabmetadsn -> {'*Tables'} = $tables ;
+		if ($self->{'*Debug'} > 3) 
+		    {
+		    my $t ;
+		    foreach $t (keys %$tables)
+			{ print DBIx::Recordset::LOG "DB:  Found table $t => $tables->{$t}\n" ; }
+		    }
+		}
+	    else
+		{
+		$tabmetadsn -> {'*Tables'} = {} ;
+		}
+            
+            $DBIx::Recordset::Metadata{$metakeydsn} = $metadsn ;
+            $DBIx::Recordset::Metadata{"$metakeydsn$self->{'*TableFilter'}"} = $tabmetadsn ;
+            }
+
+	if ($#tabs <= 0)
+	    {
+	    my $fullname ;
+            my $tabfilter = $self -> {'*TableFilter'}  ;
+	    my $fullltab ;
+            my $tableshort = $table ;
+            if ($tabfilter && ($table =~ /^$tabfilter(.*?)$/))
+                {
+                $tableshort     = $1 ;
+                }
+            foreach $fullname (@FullNames)
+		{
+		my ($ntab, $n) = split (/\./, $fullname) ;
+		my $prefix = '' ;
+                my $fullntab = $ntab ;
+                
+                if ($tabfilter && ($ntab =~ /^$tabfilter(.*?)$/))
+                    {
+                    $ntab     = $1 ;
+                    }
+
+		if ($n =~ /^(.*?)__(.*?)$/)
+		    {
+		    $prefix = "$1__" ;
+		    $n = $2 ;
+		    }
+
+		my @part = split (/_/, $n) ;
+		my $tf = $tabfilter || '' ;
+                for (my $i = 0; $i < $#part; $i++)
+		    {
+		    $ltab   = join ('_', @part[0..$i]) ;
+		    $lfield = join ('_', @part[$i + 1..$#part]) ;
+            
+		    if (!$tables -> {$ltab} && $tables -> {"$tf$ltab"}) 
+                        { $fullltab = "$tabfilter$ltab" }
+                    else
+                        { $fullltab = $ltab }
+
+		    if ($tables -> {$fullltab}) 
+			{
+			$metakey = $self -> QueryMetaData ($fullltab) ;
+			$subnames = $metakey -> {'*Names'} ;
+			if (grep (/^$lfield$/i, @$subnames))
+			    { # setup link
+			    $meta -> {'*Links'}{"-$prefix$ltab"} = {'!Table' => $fullltab, '!LinkedField' => $lfield, '!MainField' => "$prefix$n", '!MainTable' => $fullntab} ;
+			    print DBIx::Recordset::LOG "Link found for $ntab.$prefix$n to $ltab.$lfield\n" if ($self->{'*Debug'} > 2) ;
+                        
+			    #my $metakeyby    = "$self->{'*DataSource'}//$ltab" ;
+			    #my $linkedby = $DBIx::Recordset::Metadata{$metakeyby} -> {'*Links'} ;
+			    my $linkedby = $metakey -> {'*Links'} ;
+			    $linkedby -> {"-$tableshort"} = {'!Table' => $fullntab, '!MainField' => $lfield, '!LinkedField' => "$prefix$n", '!LinkedBy' => $fullltab, '!MainTable' => $fullltab} ;
+			    }
+			last ;
+			}
+		    }
+		}
+	    }
+    	else
+	    { 
+	    foreach $ltab (@tabs)
+		{
+                $metakey = $self -> QueryMetaData ($ltab) ;
+
+		my $k ;
+		my $v ;
+		my $lbtab ;
+		my $links = $metakey -> {'*Links'} ;
+		while (($k, $v) = each (%$links))
+		    {
+		    if (!$meta -> {'*Links'}{$k}) 
+			{
+			$meta -> {'*Links'}{$k} = { %$v } ;
+    			print DBIx::Recordset::LOG "Link copied: $k\n" if ($self->{'*Debug'} > 2) ;
+			}
+		    
+		    }
+		}
+	    }
+
+	}
+
+
+    return $meta ;
+    }
+
+
+###################################################################################
 
 package DBIx::Database ;
 
 use strict 'vars' ;
 
+use vars qw{$LastErr $LastErrstr *LastErr *LastErrstr *LastError $PreserveCase @ISA} ;
+
+@ISA = ('DBIx::Database::Base') ;
+
+*LastErr    = \$DBIx::Recordset::LastErr ;
+*LastErrstr = \$DBIx::Recordset::LastErrstr ;
+*LastError  = \&DBIx::Recordset::LastError ;
+*PreserveCase  = \$DBIx::Recordset::PreserveCase;
+
+
 use Carp ;
+
+## ----------------------------------------------------------------------------
+##
+## connect
+##
+
+sub connect
+
+    {
+    my ($self, $password) = @_ ; 
+
+    my $hdl = $self->{'*DBHdl'}  = DBI->connect($self->{'*DataSource'}, $self->{'*Username'}, $password, $self->{'*DBIAttr'}) or $self -> savecroak ("Cannot connect to $self->{'*DataSource'} ($DBI::errstr)") ;
+
+    $LastErr    = $self->{'*LastErr'}	    = $DBI::err ;
+    $LastErrstr = $self->{'*LastErrstr'}    = $DBI::errstr ;
+
+    $self->{'*MainHdl'}    = 1 ;
+    $self->{'*Driver'}     = $hdl->{Driver}->{Name} ;
+    if ($self->{'*Driver'} eq 'Proxy')
+	{
+        $self->{'*DataSource'} =~ /dsn\s*=\s*dbi:(.*?):/i ;
+	$self->{'*Driver'} = $1 ;
+	print DBIx::Recordset::LOG "DB:  Found DBD::Proxy, take compability entrys for driver $self->{'*Driver'}\n" if ($self->{'*Debug'} > 1) ;
+	}
+
+    print DBIx::Recordset::LOG "DB:  Successfull connect to $self->{'*DataSource'} \n" if ($self->{'*Debug'} > 1) ;
+
+    my $cmd ;
+    if ($hdl && ($cmd = $self -> {'*DoOnConnect'}))
+        {
+        $self -> DoOnConnect ($cmd) ;
+        }
+  
+    return $hdl ;
+    }
 
 
 ## ----------------------------------------------------------------------------
@@ -39,12 +510,22 @@ use Carp ;
 ## $saveas       = Name for this DBIx::Database object to save
 ##                 The name can be used in Get, or as !DataSource for DBIx::Recordset
 ## $keepopen     = keep connection open to use in further DBIx::Recordset setups
+## $tabfilter    = regex which tables should be used
 ##
 
 sub new
 
     {
-    my ($class, $data_source, $username, $password, $attr, $saveas, $keepopen) = @_ ;
+    my ($class, $data_source, $username, $password, $attr, $saveas, $keepopen, $tabfilter, $doonconnect) = @_ ;
+    
+
+    if (ref ($data_source) eq 'HASH')
+        {
+        my $p = $data_source ;
+        ($data_source, $username, $password, $attr, $saveas, $keepopen, $tabfilter, $doonconnect) = 
+        @$p{('!DataSource', '!Username', '!Password', '!DBIAttr', '!SaveAs', '!KeepOpen', '!TableFilter', '!DoOnConnect')} ;
+        }
+            
     
     my $metakey  ;
     my $self ;
@@ -52,13 +533,19 @@ sub new
     if (!($data_source =~ /^dbi:/i)) 
         {
         $metakey    = "-DATABASE//$1"  ;
-        return $DBIx::Recordset::Metadata{$metakey} ;
+        $self = $DBIx::Recordset::Metadata{$metakey} ;
+        $self -> connect ($password) if ($keepopen && !defined ($self->{'*DBHdl'})) ;
+        return $self ;
         }
     
     if ($saveas)
         {
         $metakey    = "-DATABASE//$saveas"  ;
-        return $self if (defined ($self = $DBIx::Recordset::Metadata{$metakey})) ;
+        if (defined ($self = $DBIx::Recordset::Metadata{$metakey}))
+            {
+            $self -> connect ($password) if ($keepopen && !defined ($self->{'*DBHdl'})) ;
+            return $self ;
+            }
         }
 
 
@@ -67,6 +554,8 @@ sub new
                 '*DataSource' => $data_source,
                 '*DBIAttr'    => $attr,
                 '*Username'   => $username, 
+                '*TableFilter' => $tabfilter, 
+                '*DoOnConnect' => $doonconnect,
                } ;
 
     bless ($self, $class) ;
@@ -75,21 +564,13 @@ sub new
 
     if (!defined ($self->{'*DBHdl'}))
         {
-        $hdl = $self->{'*DBHdl'}  = DBI->connect($self->{'*DataSource'}, $self->{'*Username'}, $password, $self->{'*DBIAttr'}) or croak "Cannot connect to $data_source" ;
-
-        $self->{'*MainHdl'}    = 1 ;
-        $self->{'*Driver'}     = $hdl->{Driver}->{Name} ;
-	if ($self->{'*Driver'} eq 'Proxy')
-	    {
-            $self->{'*DataSource'} =~ /dsn\s*=\s*dbi:(.*?):/i ;
-	    $self->{'*Driver'} = $1 ;
-	    print LOG "DB:  Found DBD::Proxy, take compability entrys for driver $self->{'*Driver'}\n" if ($self->{'*Debug'} > 1) ;
-	    }
-
-        print DBIx::Recordset::LOG "DB:  Successfull connect to $self->{'*DataSource'} \n" if ($self->{'*Debug'} > 1) ;
+        $hdl = $self->connect ($password) ;
         }
     else
         {
+        $LastErr	= $self->{'*LastErr'}   = undef ;
+        $LastErrstr = $self->{'*LastErrstr'}    = undef ;
+    
         $hdl = $self->{'*DBHdl'} ;
         print DBIx::Recordset::LOG "DB:  Use already open dbh for $self->{'*DataSource'}\n" if ($self->{'*Debug'} > 1) ;
         }
@@ -98,8 +579,10 @@ sub new
 
     my $drv        = $self->{'*Driver'} ;
     my $metakeydsn = "$self->{'*DataSource'}//-" ;
+    my $metakeydsntf = "$self->{'*DataSource'}//-"  . ($self->{'*TableFilter'}||'');
     my $metadsn    = $DBIx::Recordset::Metadata{$metakeydsn} || {} ;
-    my $tables     = $metadsn -> {'*Tables'} ;
+    my $tabmetadsn = $DBIx::Recordset::Metadata{$metakeydsntf} || {} ;
+    my $tables     = $tabmetadsn -> {'*Tables'} ;
 
     if (!$tables)
         { # Query the driver, which tables are available
@@ -108,23 +591,36 @@ sub new
         
         if ($ListTables)
 	    {
-	    my @tabs = &{$ListTables}($hdl) or croak "Cannot list tables for $self->{'*DataSource'} ($DBI::errstr)" ;
+	    my @tabs = &{$ListTables}($hdl) ; # or $self -> savecroak ("Cannot list tables for $self->{'*DataSource'} ($DBI::errstr)") ;
+	    my @stab ;
+	    my $stab ;
+
+            $tabfilter ||= '.' ;
+            foreach (@tabs)
+                {
+                if ($_ =~ /$tabfilter/i)
+                    {
+                    @stab = split (/\./);
+                    $stab = $PreserveCase?(pop @stab):lc (pop @stab) ;
+                    $tables -> {$stab} =  $_ ;
+                    }
+                }
         
-	    %$tables = map { $_ => 1 } @tabs ; 
-	    $metadsn -> {'*Tables'} = $tables ;
+	    $tabmetadsn -> {'*Tables'} = $tables ;
 	    if ($self->{'*Debug'} > 2) 
 		{
 		my $t ;
-		foreach $t (@tabs)
-		    { print DBIx::Recordset::LOG "DB:  Found table $t\n" ; }
+		foreach $t (keys %$tables)
+		    { print DBIx::Recordset::LOG "DB:  Found table $t => $tables->{$t}\n" ; }
 		}
 	    }
 	else    
 	    {
-	    $metadsn -> {'*Tables'} = {} ;
+	    $tabmetadsn -> {'*Tables'} = {} ;
 	    }
             
         $DBIx::Recordset::Metadata{$metakeydsn} = $metadsn ;
+        $DBIx::Recordset::Metadata{$metakeydsntf} = $tabmetadsn ;
         }
 
     my $tab ;
@@ -132,7 +628,7 @@ sub new
 
     while (($tab, $x) = each (%{$tables}))
         {
-        DBIx::Recordset::QueryMetaData ($self, $tab) ;
+        $self -> QueryMetaData ($tab) ;
         }
 
     
@@ -144,10 +640,12 @@ sub new
         {
         $self->{'*DBHdl'} -> disconnect () ;
         undef $self->{'*DBHdl'} ;
+        print DBIx::Recordset::LOG "DB:  Disconnect from $self->{'*DataSource'} \n" if ($self->{'*Debug'} > 1) ;
         }
     
     return $self ;
     }
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -184,12 +682,14 @@ sub TableAttr
     {
     my ($self, $table, $key, $value) = @_ ;
 
+    $table = lc($table) if (!$PreserveCase) ;
+
     my $meta ;
     my $metakey    = "$self->{'*DataSource'}//$table" ;
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-        croak "Unknow table $table in $self->{'*DataSource'}" ;
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
         }
 
     # set new value if wanted
@@ -224,13 +724,17 @@ sub TableLink
     {
     my ($self, $table, $key, $value) = @_ ;
 
+    $table = lc($table)  if (!$PreserveCase) ;
+
     my $meta ;
     my $metakey    = "$self->{'*DataSource'}//$table" ;
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-        croak "Unknow table $table in $self->{'*DataSource'}" ;
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
         }
+
+    return $meta -> {'*Links'} if (!defined ($key)) ;
 
     return $meta -> {'*Links'} -> {$key} = $value if (defined ($value)) ;
 
@@ -238,6 +742,36 @@ sub TableLink
     }
 
 
+## ----------------------------------------------------------------------------
+##
+## MetaData
+##
+## get/set metadata for a given table
+##
+## $table     = Name of table
+## $metadata  = meta data to set
+##
+
+
+sub MetaData
+
+    {
+    my ($self, $table, $metadata, $clear) = @_ ;
+
+    $table = lc($table)  if (!$PreserveCase) ;
+
+    my $meta ;
+    my $metakey    = "$self->{'*DataSource'}//$table" ;
+    
+    if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
+        {
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
+        }
+
+    return $meta if (!defined ($metadata) && !$clear) ;
+
+    return $DBIx::Recordset::Metadata{$metakey} = $metadata ;
+    }
 
 ## ----------------------------------------------------------------------------
 ##
@@ -250,10 +784,66 @@ sub AllTables
 
     {
     my $self = shift ;
-    my $metakeydsn = "$self->{'*DataSource'}//-" ;
+    my $metakeydsn = "$self->{'*DataSource'}//-$self->{'*TableFilter'}" ;
     my $metadsn    = $DBIx::Recordset::Metadata{$metakeydsn} || {} ;
     return $metadsn -> {'*Tables'} ;
     }
+
+## ----------------------------------------------------------------------------
+##
+## AllNames
+##
+## return reference to array of all names in all tables
+##
+## $table     = Name of table
+##
+
+sub AllNames
+
+    {
+    my ($self, $table) = @_ ;
+
+    $table = lc($table)  if (!$PreserveCase) ;
+
+    my $meta ;
+    my $metakey    = "$self->{'*DataSource'}//$table" ;
+    
+    if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
+        {
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
+        }
+
+    return $meta -> {'*Names'}  ;
+    }
+
+## ----------------------------------------------------------------------------
+##
+## AllTypes
+##
+## return reference to array of all types in all tables
+##
+## $table     = Name of table
+##
+
+sub AllTypes
+
+    {
+    my ($self, $table) = @_ ;
+
+    $table = lc($table)  if (!$PreserveCase) ;
+
+    my $meta ;
+    my $metakey    = "$self->{'*DataSource'}//$table" ;
+    
+    if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
+        {
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
+        }
+
+    return $meta -> {'*Types'}  ;
+    }
+
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -267,12 +857,19 @@ sub DESTROY
 
     {
     my $self = shift ;
+    my $orgerr = $@ ;
+    local $@ ;
 
-    if (defined ($self->{'*DBHdl'}))
-        {
-        $self->{'*DBHdl'} -> disconnect () ;
-        undef $self->{'*DBHdl'} ;
-        }
+    eval 
+	{ 
+	if (defined ($self->{'*DBHdl'}))
+	    {
+	    $self->{'*DBHdl'} -> disconnect () ;
+	    undef $self->{'*DBHdl'} ;
+	    }
+	} ;
+    $self -> savecroak ($@) if (!$orgerr && $@) ;
+    warn $@ if ($orgerr && $@) ;
     }
 
 
@@ -314,16 +911,25 @@ use vars
     %Metadata
 
     %unaryoperators
+    
+    $LastErr
+    $LastErrstr
+
+    $PreserveCase
+    $FetchsizeWarn
     );
 
 use DBI ;
 
 require Exporter;
 
-@ISA       = qw(Exporter);
+@ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.19-beta';
+$VERSION = '0.20-beta';
 
+
+$PreserveCase = 0 ;
+$FetchsizeWarn = 2 ;
 
 $id = 1 ;
 $numOpen = 0 ;
@@ -336,6 +942,9 @@ use constant wmUPDATE => 2 ;
 use constant wmDELETE => 4 ;
 use constant wmCLEAR  => 8 ;
 use constant wmALL    => 15 ;
+
+use constant rqINSERT => 1 ;
+use constant rqUPDATE => 2 ;
 
 %unaryoperators = (
     'is null' => 1,
@@ -356,235 +965,6 @@ else
 
 ## ----------------------------------------------------------------------------
 ##
-## QueryMetaData
-##
-## $table        = table (multiple tables must be comma separated)
-##
-
-
-sub QueryMetaData($$)
-
-    {
-    my ($self, $table) = @_ ;
-            
-    my $meta ;
-    my $metakey    = "$self->{'*DataSource'}//$table" ;
-    
-    if (defined ($meta = $Metadata{$metakey})) 
-        {
-        print LOG "DB:   use cached meta data for $table\n" if ($self->{'*Debug'} > 2) ;
-        return $meta 
-        }
-
-    my $hdl = $self->{'*DBHdl'} ;
-    my $drv = $self->{'*Driver'} ;
-    my $sth ;
-    
-    my $ListFields = DBIx::Compat::GetItem ($drv, 'ListFields') ;
-    my $QuoteTypes = DBIx::Compat::GetItem ($drv, 'QuoteTypes') ;
-    my $HaveTypes  = DBIx::Compat::GetItem ($drv, 'HaveTypes') ;
-    my @tabs = split (/\s*\,\s*/, $table) ;
-    my $tab ;
-    my $ltab ;
-    my %Quote ;
-    my @Names ;
-    my @Types ;
-    my @FullNames ;
-    my %Table4Field ;
-
-    foreach $tab (@tabs)
-        {
-        $sth = &{$ListFields}($hdl, $tab) or croak "Cannot list fields for $tab" ;
-	$ltab = lc($tab) ;
-	
-        my $types ;
-        my $fields = $sth -> {NAME}  ;
-        my $num = $#{$fields} + 1 ;
-    
-        if ($HaveTypes)
-            {
-            #print LOG "DB: Have Types for driver\n" ;
-            $types = $sth -> {TYPE}  ;
-            }
-        else
-            {
-            #print LOG "DB: No Types for driver\n" ;
-            # Drivers does not have fields types -> give him SQL_VARCHAR
-            my $i ;
-            $types = [] ;
-            for ($i = 0; $i < $num; $i++)
-                { push @$types, DBI::SQL_VARCHAR (); }
-
-            # Setup quoting for SQL_VARCHAR
-            $QuoteTypes = { DBI::SQL_VARCHAR() => 1 } ;
-            }
-    
-        push @Names, map { lc($_)} @{ $fields } ;
-        push @Types, map { lc($_)} @{ $types } ;
-	my $lfield ;
-        foreach (@$fields)
-            {
-            $lfield = lc($_) ;
-	    $Table4Field{$lfield} = $ltab ;        
-            $Table4Field{"$ltab.$_"} = $ltab ;
-            push @FullNames, "$ltab.$lfield"  ;
-            }        
-
-        $sth -> finish ;
-
-        # Set up a hash which tells us which fields to quote and which not
-        # We setup two versions, one with tablename and one without
-        my $col ;
-        my $fieldname ;
-        for ($col = 0; $col < $num; $col++ )
-            {
-            if ($self->{'*Debug'} > 2)
-                {
-                my $n = $$fields[$col] ;
-                my $t = $$types[$col] ;
-                print LOG "DB: TAB = $tab, COL = $col, NAME = $n, TYPE = $t" ;
-                }
-            $fieldname = lc($$fields[$col]) ;
-            if ($$QuoteTypes{$$types[$col]})
-                {
-                print LOG " -> quote\n" if ($self->{'*Debug'} > 2) ;
-                $Quote {lc("$tab.$fieldname")} = 1 ;
-                $Quote {lc("$fieldname")} = 1 ;
-                }
-            else
-                {
-                print LOG "\n" if ($self->{'*Debug'} > 2) ;
-                $Quote {lc("$tab.$fieldname")} = 0 ;
-                $Quote {lc("$fieldname")} = 0 ;
-                }
-            }
-        print LOG "No Fields found for $tab\n" if ($num == 0 && $self->{'*Debug'} > 1) ;
-        }
-
-    print LOG "No Tables specified\n" if ($#tabs < 0 && $self->{'*Debug'} > 1) ;
-
-
-    $meta = {} ;
-    $meta->{'*Table4Field'}  = \%Table4Field ;
-    $meta->{'*FullNames'}    = \@FullNames ;
-    $meta->{'*Names'}  = \@Names ;
-    $meta->{'*Types'}  = \@Types ;
-    $meta->{'*Quote'}  = \%Quote ;    
-
-    $Metadata{$metakey} = $meta ;
-    
-
-    if (!exists ($meta -> {'*Links'}))
-        { 
-        my $ltab ;
-        my $lfield ;
-        my $metakey ;
-        my $subnames ;
-        my $n ;
-
-        $meta -> {'*Links'} = {} ;
-
-        my $metakeydsn = "$self->{'*DataSource'}//-" ;
-        my $metadsn    = $Metadata{$metakeydsn} || {} ;
-        my $tables     = $metadsn -> {'*Tables'} ;
-
-        if (!$tables)
-            { # Query the driver, which tables are available
-            my $ListTables = DBIx::Compat::GetItem ($drv, 'ListTables') ;
-
-	    if ($ListTables)
-		{            
-		my @tabs = &{$ListTables}($hdl) or croak "Cannot list tables for $self->{'*DataSource'} ($DBI::errstr)" ;
-		my @stab ;
-
-		%$tables = map { @stab = split (/\./); lc($stab[$#stab]) => $_ } @tabs ; 
-		$metadsn -> {'*Tables'} = $tables ;
-		if ($self->{'*Debug'} > 3) 
-		    {
-		    my $t ;
-		    foreach $t (keys %$tables)
-			{ print LOG "DB:  Found table $t => $tables->{$t}\n" ; }
-		    }
-		}
-	    else
-		{
-		$metadsn -> {'*Tables'} = {} ;
-		}
-            
-            $Metadata{$metakeydsn} = $metadsn ;
-            }
-
-	if ($#tabs <= 0)
-	    {
-	    my $fullname ;
-	    foreach $fullname (@FullNames)
-		{
-		my ($ntab, $n) = split (/\./, $fullname) ;
-		my $prefix = '' ;
-
-		if ($n =~ /^(.*?)__(.*?)$/)
-		    {
-		    $prefix = "$1__" ;
-		    $n = $2 ;
-		    }
-
-		my @part = split (/_/, $n) ;
-		for (my $i = 0; $i < $#part; $i++)
-		    {
-		    $ltab   = join ('_', @part[0..$i]) ;
-		    $lfield = join ('_', @part[$i + 1..$#part]) ;
-            
-		    if ($tables -> {$ltab}) 
-			{
-			$metakey = DBIx::Recordset::QueryMetaData ($self, $ltab) ;
-			$subnames = $metakey -> {'*Names'} ;
-			if (grep (/^$lfield$/i, @$subnames))
-			    { # setup link
-			    $meta -> {'*Links'}{"-$prefix$ltab"} = {'!Table' => $ltab, '!LinkedField' => $lfield, '!MainField' => "$prefix$n", '!MainTable' => $ntab} ;
-			    print LOG "Link found for $ntab.$prefix$n to $ltab.$lfield\n" if ($self->{'*Debug'} > 2) ;
-                        
-			    #my $metakeyby    = "$self->{'*DataSource'}//$ltab" ;
-			    #my $linkedby = $Metadata{$metakeyby} -> {'*Links'} ;
-			    my $linkedby = $metakey -> {'*Links'} ;
-			    $linkedby -> {"-$table"} = {'!Table' => $ntab, '!MainField' => $lfield, '!LinkedField' => "$prefix$n", '!LinkedBy' => $ltab, '!MainTable' => $ltab} ;
-			    }
-			last ;
-			}
-		    }
-		}
-	    }
-    	else
-	    { 
-	    foreach $ltab (@tabs)
-		{
-                $metakey = DBIx::Recordset::QueryMetaData ($self, $ltab) ;
-
-		my $k ;
-		my $v ;
-		my $lbtab ;
-		my $links = $metakey -> {'*Links'} ;
-		while (($k, $v) = each (%$links))
-		    {
-		    if (!$meta -> {'*Links'}{$k}) 
-			{
-			$meta -> {'*Links'}{$k} = { %$v } ;
-    			print LOG "Link copied: $k\n" if ($self->{'*Debug'} > 2) ;
-			}
-		    
-		    }
-		}
-	    }
-
-	}
-
-
-    return $meta ;
-    }
-
-
-
-## ----------------------------------------------------------------------------
-##
 ## SetupDBConnection
 ##
 ## $data_source  = Driver/DB/Host
@@ -601,7 +981,8 @@ sub SetupDBConnection($$$;$$\%)
     {
     my ($self, $data_source,  $table, $username, $password, $attr, $autolink) = @_ ;
 
-    $self->{'*Table'}      = $table ;
+    $self->{'*Table'}      = $PreserveCase?$table:lc ($table) ;
+    $self->{'*MainTable'}  = $PreserveCase?$table:lc ($table) ;
     $self->{'*Id'}         = $id++ ;
 
     if (!($data_source =~ /^dbi\:/i)) 
@@ -624,8 +1005,22 @@ sub SetupDBConnection($$$;$$\%)
         $self->{'*DataSource'} = $data_source->{'*DataSource'} ;
         $self->{'*Username'}   = $data_source->{'*Username'} ; 
         $self->{'*DBIAttr'}    = $data_source->{'*DBIAttr'} ;
-        $self->{'*DBHdl'}      = undef ;
+        $self->{'*TableFilter'}= $data_source->{'*TableFilter'} ;
+        $self->{'*DBHdl'}      = $data_source->{'*DBHdl'} ;    
+        $self->{'*Driver'}     = $data_source->{'*Driver'} ;   
+        $self->{'*DoOnConnect'} = $data_source->{'*DoOnConnect'} ;
         }
+     elsif (ref ($data_source) and eval { $data_source->isa('DBI::db') } )
+         { # copy from database handle
+         $self->{'*Driver'}     = $data_source->{'Driver'}->{'Name'} ;
+         $self->{'*DataSource'} = $data_source->{'Name'} ;
+         # DBI does not save user name
+         $self->{'*Username'}   = undef ;
+         $self->{'*DBHdl'}      = $data_source ;
+         # XXX no idea how to fetch attr hash other than handle itself
+         $self->{'*DBIAttr'}    = {} ;
+         $self->{'*MainHdl'}    = 0 ;
+         }
     else
         {
         $self->{'*DataSource'} = $data_source ;
@@ -641,6 +1036,9 @@ sub SetupDBConnection($$$;$$\%)
         {
         $hdl = $self->{'*DBHdl'}  = DBI->connect($self->{'*DataSource'}, $self->{'*Username'}, $password, $self->{'*DBIAttr'}) or return undef ;
 
+        $LastErr    = $self->{'*LastErr'}	= $DBI::err ;
+        $LastErrstr = $self->{'*LastErrstr'}    = $DBI::errstr ;
+    
         $self->{'*MainHdl'}    = 1 ;
         $self->{'*Driver'}     = $hdl->{Driver}->{Name} ;
 	if ($self->{'*Driver'} eq 'Proxy')
@@ -653,9 +1051,18 @@ sub SetupDBConnection($$$;$$\%)
         $numOpen++ ;
 
         print LOG "DB:  Successfull connect to $self->{'*DataSource'} (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'} > 1) ;
+
+        my $cmd ;
+        if ($hdl && ($cmd = $self -> {'*DoOnConnect'}))
+            {
+            $self -> DoOnConnect ($cmd) ;
+            }
         }
     else
         {
+        $LastErr    = $self->{'*LastErr'}	= undef ;
+        $LastErrstr = $self->{'*LastErrstr'}    = undef ;
+    
         $hdl = $self->{'*DBHdl'} ;
         print LOG "DB:  Use already open dbh for $self->{'*DataSource'} (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'} > 1) ;
         }
@@ -663,18 +1070,21 @@ sub SetupDBConnection($$$;$$\%)
     
 
     my $meta = $self -> QueryMetaData ($self->{'*Table'}) ;
-    my $metakey    = "$self->{'*DataSource'}//$self->{'*Table'}" ;
+    my $metakey    = "$self->{'*DataSource'}//" . $self->{'*Table'} ;
     
     $self->{'*NullOperator'} = DBIx::Compat::GetItem ($self->{'*Driver'}, 'NullOperator') ;
 
-    $meta or croak "No meta data available for $self->{'*Table'}" ;
+    $meta or $self -> savecroak ("No meta data available for $self->{'*Table'}") ;
 
     $self->{'*Table4Field'} = $meta->{'*Table4Field'} ;
+    $self->{'*Type4Field'}  = $meta->{'*Type4Field'} ;
     #$self->{'*MainFields'} = $meta->{'*MainFields'} ;
     $self->{'*FullNames'}= $meta->{'*FullNames'} ;
     $self->{'*Names'}    = $meta->{'*Names'} ;
     $self->{'*Types'}    = $meta->{'*Types'} ;
     $self->{'*Quote'}    = $meta->{'*Quote'} ;
+    $self->{'*Numeric'}  = $meta->{'*Numeric'} ;
+    $self->{'*NumericTypes'}  = $meta->{'*NumericTypes'} ;
     $self->{'*Links'}    = $meta->{'*Links'} ;
     $self->{'*PrimKey'}  = $meta->{'!PrimKey'} ;
 
@@ -772,6 +1182,40 @@ sub New
 
 ## ----------------------------------------------------------------------------
 ##
+## SetupMemberVar
+##
+## setup a member config variable checking
+## 1.) given parameter
+## 2.) TableAttr
+## 3.) default
+##
+
+
+sub SetupMemberVar
+    {
+    my ($self, $name, $param, $default) = @_ ;
+
+    my $pn = "!$name" ;
+    my $sn = "\*$name" ;
+    my $attr ;
+
+    if (exists $param -> {$pn})
+	{
+	$self -> {$sn} = $param -> {$pn} ;
+	}
+    elsif ($attr = $self -> TableAttr ($pn))
+	{
+	$self -> {$sn} = $attr ;
+	}
+    else
+	{
+	$self -> {$sn} = $default ;
+	}
+    }
+
+
+## ----------------------------------------------------------------------------
+##
 ## Setup
 ##
 ## creates an new recordset object and ties an array and an hash to it
@@ -806,6 +1250,9 @@ sub New
 ##		  4 => allow delete (wmDELETE)
 ##                8 => allow delete all (wmCLEAR)
 ##		    default = 7
+## !TableFilter = regex which tables should be used
+##
+
 
 sub SetupObject
 
@@ -814,30 +1261,36 @@ sub SetupObject
 
     my $self = New ($class, $$parm{'!DataSource'}, $$parm{'!Table'}, $$parm{'!Username'}, $$parm{'!Password'}, $$parm{'!DBIAttr'}) or return undef ; 
 
-    $self->{'*Fields'}      = $$parm{'!Fields'} ;
-    $self->{'*TabRelation'} = $$parm{'!TabRelation'} ;
-    $self->{'*TabJoin'}     = $$parm{'!TabJoin'} ;
-    $self->{'*PrimKey'}     = $$parm{'!PrimKey'} if (defined ($$parm{'!PrimKey'})) ;
-    $self->{'*StoreAll'}    = $$parm{'!StoreAll'} ;
-    $self->{'*Default'}     = $$parm{'!Default'} if (defined ($$parm{'!Default'})) ;
-    $self->{'*IgnoreEmpty'} = $$parm{'!IgnoreEmpty'} || 0 ;
-    $self->{'*WriteMode'}   = $$parm{'!WriteMode'} || 7 ;
-    $self->{'*LongNames'}   = $$parm{'!LongNames'} || 0 ;
-    $self->{'*LinkName'}    = $$parm{'!LinkName'} if (exists $$parm{'!LinkName'}) ;
-    $self->{'*LinkName'}  ||= 0 ;
-    $self->{'*NameField'}   = $$parm{'!NameField'} if (exists $$parm{'!NameField'}) ;
+    $self -> SetupMemberVar ('Fields', $parm) ;
+    $self -> SetupMemberVar ('TabRelation', $parm) ;
+    $self -> SetupMemberVar ('TabJoin', $parm) ;
+    $self -> SetupMemberVar ('PrimKey', $parm) ;
+    $self -> SetupMemberVar ('StoreAll', $parm) ;
+    $self -> SetupMemberVar ('Default', $parm) ;
+    $self -> SetupMemberVar ('IgnoreEmpty', $parm, 0) ;
+    $self -> SetupMemberVar ('WriteMode', $parm, 7) ;
+    $self -> SetupMemberVar ('TieRow', $parm, 1) ;
+    $self -> SetupMemberVar ('LongNames', $parm, 0) ;
+    $self -> SetupMemberVar ('LinkName', $parm, 0) ;
+    $self -> SetupMemberVar ('NameField', $parm) ;
+    $self -> SetupMemberVar ('Order', $parm) ;
+    $self -> SetupMemberVar ('TableFilter', $parm) ;
+    $self -> SetupMemberVar ('DoOnConnect', $parm) ;
+
     $Data{$self->{'*Id'}}   = [] ;
     $self->{'*FetchStart'}  = 0 ;
     $self->{'*FetchMax'}    = undef ;
     $self->{'*EOD'}         = undef ;
     $self->{'*CurrRow'}     = 0 ;
-    $self->{'*MainTable'}   = lc ($self->{'*Table'}) ;
     $self->{'*Stats'} = {} ;
-    $self->{'*Order'}       = $self -> TableAttr ('!Order') if ($self -> TableAttr ('!Order')) ;
-    $self->{'*Order'}       = $$parm{'!Order'} if (exists $$parm{'!Order'}) ;
+    $self->{'*CurrRecStack'} = [] ;
+    $LastErr	= $self->{'*LastErr'}	    = undef ;
+    $LastErrstr = $self->{'*LastErrstr'}    = undef ;
 
     my $ofunc = $self->{'*OutputFunctions'} = {} ;
     my $ifunc = $self->{'*InputFunctions'}  = {} ;
+    my $irfunc_insert = $self->{'*InputFunctionsRequiredOnInsert'}  = [] ;
+    my $irfunc_update = $self->{'*InputFunctionsRequiredOnUpdate'}  = [] ;
     my $names = $self->{'*Names'} ;
     my $types = $self->{'*Types'} ;
     my $key ;
@@ -850,7 +1303,7 @@ sub SetupObject
 	    {
 	    while (($key, $value) = each (%$conversion))
 		{
-		if ($key =~ /^\d*$/)
+		if ($key =~ /^-?\d*$/)
 		    { # numeric -> SQL_TYPE
 		    my $i = 0 ;
 		    my $name ;
@@ -859,22 +1312,34 @@ sub SetupObject
 			if ($_ == $key) 
 			    {
 			    $name = $names -> [$i] ;
-			    $ifunc -> {$name} = $value -> [0] if ($value -> [0]) ;
-			    $ofunc -> {$name} = $value -> [1] if ($value -> [1]) ;
+			    if ($value -> [0] || $ifunc -> {$name}) 
+                                {
+                                $ifunc -> {$name} = $value -> [0] ;
+		                push @$irfunc_insert, $name if ($value -> [2] & rqINSERT) ;
+		                push @$irfunc_update, $name if ($value -> [2] & rqUPDATE) ;
+                                }
+			    $ofunc -> {$name} = $value -> [1] if ($value -> [1] || $ofunc -> {$name}) ;
 			    }
 			$i++ ;
 			}
 		    }
 		else
 		    {    	    
-    		    $ifunc -> {$key} = $value -> [0] if ($value -> [0]) ;
-    		    $ofunc -> {$key} = $value -> [1] if ($value -> [1]) ;
+		    if ($value -> [0] || $ifunc -> {$key}) 
+                        {
+                        $ifunc -> {$key} = $value -> [0] ;
+		        push @$irfunc_insert, $key if ($value -> [2] & rqINSERT) ;
+		        push @$irfunc_update, $key if ($value -> [2] & rqUPDATE) ;
+                        }
+    		    $ofunc -> {$key} = $value -> [1] if ($value -> [1] || $ofunc -> {$key}) ;
 		    }
 		}
 	    }
 	}
 
     delete $self->{'*OutputFunctions'} if (keys (%$ofunc) == 0) ;
+    delete $self->{'*InputFunctionsRequiredOnInsert'} if ($#$irfunc_insert == -1) ;
+    delete $self->{'*InputFunctionsRequiredOnUpdate'} if ($#$irfunc_update == -1) ;
     	
 
     my $links =  $$parm{'!Links'} ;
@@ -993,6 +1458,7 @@ sub Disconnect ($)
     if (defined ($self->{'*StHdl'})) 
         {
         $self->{'*StHdl'} -> finish () ;
+        print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
         undef $self->{'*StHdl'} ;
         }
 
@@ -1001,6 +1467,7 @@ sub Disconnect ($)
     if (defined ($self->{'*DBHdl'}) && $self->{'*MainHdl'})
         {
         $numOpen-- ;
+        print LOG "DB:  Call DBI disconnect (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'} > 3) ;
         $self->{'*DBHdl'} -> disconnect () ;
         undef $self->{'*DBHdl'} ;
         }
@@ -1018,15 +1485,22 @@ sub Disconnect ($)
 sub DESTROY ($)
     {
     my ($self) = @_ ;
+    my $orgerr = $@ ;
+    local $@ ;
 
-    $self -> Disconnect () ;
+    eval 
+	{ 
+	$self -> Disconnect () ;
 
-    delete $Data{$self -> {'*Id'}}  ;
+	delete $Data{$self -> {'*Id'}}  ;
 
-	{
-	local $^W = 0 ;
-	print LOG "DB:  DESTROY (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'} > 2) ;
-	}
+	    {
+	    local $^W = 0 ;
+	    print LOG "DB:  DESTROY (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'} > 2) ;
+	    }
+	} ;
+    $self -> savecroak ($@) if (!$orgerr && $@) ;
+    warn $@ if ($orgerr && $@) ;
     }
 
 
@@ -1041,7 +1515,8 @@ sub Begin
     {
     my ($self) = @_ ;
 
-    $self->{'*DBHdl'} -> begin ;
+    # 'begin' method is unhandled by DBI
+    ## ??  $self->{'*DBHdl'} -> func('begin') unless $self->{'*DBHdl'}->{'AutoCommit'};
     }
 
 ## ----------------------------------------------------------------------------
@@ -1055,7 +1530,7 @@ sub Commit
     my ($self) = @_ ;
 
     $self -> Flush ;
-    $self->{'*DBHdl'} -> commit ;
+    $self->{'*DBHdl'} -> commit unless $self->{'*DBHdl'}->{'AutoCommit'} ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -1070,7 +1545,7 @@ sub Rollback
 
     $self -> ReleaseRecords ;
 
-    $self->{'*DBHdl'} -> rollback ;
+    $self->{'*DBHdl'} -> rollback unless $self->{'*DBHdl'}->{'AutoCommit'} ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -1144,19 +1619,6 @@ sub Add
     return $num ;
     }
 
-## ----------------------------------------------------------------------------
-##
-## DBHdl
-##
-## return DBI database handle
-##
-
-sub DBHdl ($)
-
-    {
-    return $_[0] -> {'*DBHdl'} ;
-    }
-
 
 ## ----------------------------------------------------------------------------
 ##
@@ -1172,34 +1634,63 @@ sub StHdl ($)
     }
 
 
+## ----------------------------------------------------------------------------
+##
+## TableName
+##
+## return name of table
+##
+
+sub TableName ($)
+
+    {
+    return $_[0] -> {'*Table'} ;
+    }
+
+## ----------------------------------------------------------------------------
+##
+## TableNameWithoutFilter
+##
+## return name of table. If a !TabFilter was specified, and the table start with 
+## that filter text, it is removed from the front of the name
+##
+
+sub TableNameWithoutFilter ($)
+
+    {
+    my $tab = $_[0] -> {'*Table'} ;
+
+    return $1 if ($tab =~ /^$_[0]->{'*TableFilter'}(.*?)$/) ;
+    return $tab ;
+    }
+
+## ----------------------------------------------------------------------------
+##
+## PrimKey
+##
+## return name of primary key
+##
+
+sub PrimKey ($)
+
+    {
+    return $_[0] -> {'*PrimKey'} ;
+    }
 
 
 ## ----------------------------------------------------------------------------
 ##
-## do an non select statement 
+## TableFilter
 ##
-## $statement = statement to do
-## \%attr     = attribs (optional)
-## @bind_valus= values to bind (optional)
+## return table filter
 ##
 
-sub do($$;$$)
+sub TableFilter ($)
 
     {
-    my($self, $statement, $attribs, @params) = @_;
-    
-    print LOG "DB:  do $statement <@params>\n" if ($self->{'*Debug'} > 1) ;
-    
-    $self -> {'*LastSQLStatement'} = $statement ;
-
-    my $ret = $self->{'*DBHdl'} -> do ($statement, $attribs, @params) ;
-
-    print LOG "DB:  do returned $ret\n" if ($self->{'*Debug'} > 2) ;
-    print LOG "DB:  ERROR $DBI::errstr\n"  if (!$ret && $self->{'*Debug'}) ;
-    print LOG "DB:  in do $statement <@params>\n" if (!$ret && $self->{'*Debug'} == 1) ;
-    
-    return $ret ;
+    return $_[0] -> {'*TableFilter'} ;
     }
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -1254,7 +1745,7 @@ sub Names
         for ($i = 0; $i <= $#$repl; $i++)
             {
             #print LOG "### Names $i = $names->[$i]\n" ;
-            push @newnames, lc($names -> [$i]) ; 
+            push @newnames, $names -> [$i] ; 
             }
         return \@newnames ;
         }
@@ -1365,11 +1856,11 @@ sub TableAttr
    $table ||= $self -> {'*MainTable'} ;
 
     my $meta ;
-    my $metakey    = "$self->{'*DataSource'}//$table" ;
+    my $metakey    = "$self->{'*DataSource'}//" . ($PreserveCase?$table:lc ($table)) ; ;
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-        croak "Unknow table $table in $self->{'*DataSource'}" ;
+        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
         }
 
     # set new value if wanted
@@ -1417,7 +1908,7 @@ sub StartRecordNo
 ##
 ## LastSQLStatement
 ##
-## return the last executet SQL Statement
+## return the last executed SQL Statement
 ##
 
 sub LastSQLStatement
@@ -1427,6 +1918,42 @@ sub LastSQLStatement
     }
 
 
+## ----------------------------------------------------------------------------
+##
+## LastError
+##
+## returns the last error message and code (code only in array context)
+##
+
+sub LastError
+
+    {
+    my $self = shift ;
+
+    if (ref $self)
+	{
+	if (wantarray)
+	    {
+	    return ($self -> {'*LastErrstr'}, $self -> {'*LastErr'}) ;
+	    }
+	else
+	    {
+	    return $self -> {'*LastErrstr'} ;
+	    }
+	}
+    else
+	{
+	if (wantarray)
+	    {
+	    return ($LastErrstr, $LastErr) ;
+	    }
+	else
+	    {
+	    return $LastErrstr ;
+	    }
+	}
+    }
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -1435,18 +1962,26 @@ sub LastSQLStatement
 ## $fields = comma separated list of fields to insert
 ## $vals   = comma separated list of values to insert
 ## \@bind_values = values which should be insert for placeholders
+## \@bind_types  = data types of bind_values
 ##
 
 sub SQLInsert ($$$$)
 
     {
-    my ($self, $fields, $vals, $bind_values) = @_ ;
+    my ($self, $fields, $vals, $bind_values, $bind_types) = @_ ;
   
-    croak "Insert disabled for table $self->{'*Table'}" if (!($self->{'*WriteMode'} & wmINSERT)) ;
+    $self -> savecroak ("Insert disabled for table $self->{'*Table'}") if (!($self->{'*WriteMode'} & wmINSERT)) ;
       
     $self->{'*Stats'}{insert}++ ;
 
-    return $self->do ("INSERT INTO $self->{'*Table'} ($fields) VALUES ($vals)", undef, @$bind_values) ;
+    if (defined ($bind_values))
+        {
+        return $self->do ("INSERT INTO $self->{'*Table'} ($fields) VALUES ($vals)", undef, $bind_values, $bind_types) ;
+        }
+    else
+        {
+        return $self->do ("INSERT INTO $self->{'*Table'} ($fields) VALUES ($vals)") ;
+        }
     }
 
 ## ----------------------------------------------------------------------------
@@ -1456,19 +1991,27 @@ sub SQLInsert ($$$$)
 ## $data = komma separated list of fields=value to update
 ## $where = SQL Where condition
 ## \@bind_values = values which should be insert for placeholders
+## \@bind_types  = data types of bind_values
 ##
 ##
 
 sub SQLUpdate ($$$$)
 
     {
-    my ($self, $data, $where, $bind_values) = @_ ;
+    my ($self, $data, $where, $bind_values, $bind_types) = @_ ;
     
-    croak "Update disabled for table $self->{'*Table'}" if (!($self->{'*WriteMode'} & wmUPDATE)) ;
+    $self -> savecroak ("Update disabled for table $self->{'*Table'}") if (!($self->{'*WriteMode'} & wmUPDATE)) ;
 
     $self->{'*Stats'}{update}++ ;
 
-    return $self->do ("UPDATE $self->{'*Table'} SET $data WHERE $where", undef, @$bind_values) ;
+    if (defined ($bind_values))
+        {
+        return $self->do ("UPDATE $self->{'*Table'} SET $data WHERE $where", undef, $bind_values, $bind_types) ;
+        }
+    else
+        {
+        return $self->do ("UPDATE $self->{'*Table'} SET $data WHERE $where") ;
+        }
     }
 
 ## ----------------------------------------------------------------------------
@@ -1477,20 +2020,28 @@ sub SQLUpdate ($$$$)
 ##
 ## $where = SQL Where condition
 ## \@bind_values = values which should be insert for placeholders
+## \@bind_types  = data types of bind_values
 ##
 ##
 
 sub SQLDelete ($$$)
 
     {
-    my ($self, $where, $bind_values) = @_ ;
+    my ($self, $where, $bind_values, $bind_types) = @_ ;
     
-    croak "Delete disabled for table $self->{'*Table'}" if (!($self->{'*WriteMode'} & wmDELETE)) ;
-    croak "Clear (Delete all) disabled for table $self->{'*Table'}" if (!$where && !($self->{'*WriteMode'} & wmCLEAR)) ;
+    $self -> savecroak ("Delete disabled for table $self->{'*Table'}") if (!($self->{'*WriteMode'} & wmDELETE)) ;
+    $self -> savecroak ("Clear (Delete all) disabled for table $self->{'*Table'}") if (!$where && !($self->{'*WriteMode'} & wmCLEAR)) ;
 
-    $self->{'*Stats'}{delete}++ ;
+    $self->{'*Stats'}{'delete'}++ ;
 
-    return $self->do ("DELETE FROM $self->{'*Table'} " . ($where?"WHERE $where":''), undef, @$bind_values) ;
+    if (defined ($bind_values))
+        {
+        return $self->do ("DELETE FROM $self->{'*Table'} " . ($where?"WHERE $where":''), undef, $bind_values, $bind_types) ;
+        }
+    else
+        {
+        return $self->do ("DELETE FROM $self->{'*Table'} " . ($where?"WHERE $where":'')) ;
+        }
     }
 
 
@@ -1510,11 +2061,12 @@ sub SQLDelete ($$$)
 ## $group   = fields for sql group by or undef (optional, defaults to no grouping) 
 ## $append  = append that string to the select statemtn for other options (optional) 
 ## \@bind_values = values which should be inserted for placeholders
+## \@bind_types  = data types of bind_values
 ##
 
-sub SQLSelect ($;$$$$$$)
+sub SQLSelect ($;$$$$$$$)
     {
-    my ($self, $expr, $fields, $order, $group, $append, $bind_values) = @_ ;
+    my ($self, $expr, $fields, $order, $group, $append, $bind_values, $bind_types) = @_ ;
 
     my $sth ;  # statement handle
     my $where ; # where or nothing
@@ -1523,7 +2075,11 @@ sub SQLSelect ($;$$$$$$)
     my $rc  ;        #
     my $table ;
 
-    $self->{'*StHdl'} -> finish () if (defined ($self->{'*StHdl'})) ;
+    if (defined ($self->{'*StHdl'})) 
+        {
+        $self->{'*StHdl'} -> finish () ;
+        print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+        }
     undef $self->{'*StHdl'} ;
     $self->ReleaseRecords ;
     undef $self->{'*LastKey'} ;
@@ -1545,32 +2101,49 @@ sub SQLSelect ($;$$$$$$)
 
     if ($self->{'*Debug'} > 1)
         { 
-        my $b = $bind_values || [] ;
-        print LOG "DB:  $statement <@$b>\n" ;
+        my $bv = $bind_values || [] ;
+        my $bt = $bind_types || [] ;
+        print LOG "DB:  '$statement' bind_values=<@$bv> bind_types=<@$bt>\n" ;
         }
 
     $self -> {'*LastSQLStatement'} = $statement ;
 
-    $self->{'*Stats'}{select}++ ;
+    $self->{'*Stats'}{'select'}++ ;
 
     $sth = $self->{'*DBHdl'} -> prepare ($statement) ;
 
     if (defined ($sth))
         {
-        $rc = $sth -> execute (@$bind_values) ;
+        my @x ;
+        my $ni = 0 ;
+        
+        my $Numeric = $self->{'*NumericTypes'} ;
+        local $^W = 0 ; # avoid warnings
+        for (my $i = 0 ; $i < @$bind_values; $i++)
+            {
+            #print LOG "bind $i  bv=<$bind_values->[$i]>  bvcnv=" . ($Numeric -> {$bind_types -> [$i]}?$bind_values -> [$i]+0:$bind_values -> [$i]) . "  bt=$bind_types->[$i]  n=$Numeric->{$bind_types->[$i]}\n" ;
+            $bind_values -> [$i] += 0 if (defined ($bind_values -> [$i]) && $Numeric -> {$bind_types -> [$i]}) ;
+            #my $bti = $bind_types -> [$i]+0 ;
+            #$sth -> bind_param ($i+1, $bind_values -> [$i], {TYPE => $bti}) ;
+            $sth -> bind_param ($i+1, $bind_values -> [$i], $bind_types -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef) ;
+            }
+        $rc = $sth -> execute  ;
+	$self->{'*SelectedRows'} = $sth->rows;
 	}
         
+    $LastErr	= $self->{'*LastErr'}	    = $DBI::err ;
+    $LastErrstr = $self->{'*LastErrstr'}    = $DBI::errstr ;
     
     my $names ;
     if ($rc)
     	{
-	$names = $sth -> FETCH ('NAME') ;
+	$names = $sth -> FETCH (($PreserveCase?'NAME':'NAME_lc')) ;
     	$self->{'*NumFields'} = $#{$names} + 1 ;
 	}
     else
     	{
 	print LOG "DB:  ERROR $DBI::errstr\n"  if ($self->{'*Debug'}) ;
-	print LOG "DB:  in $statement <@$bind_values>\n" if ($self->{'*Debug'} == 1) ;
+	print LOG "DB:  in '$statement' bind_values=<@$bind_values> bind_types=<@$bind_types>\n" if ($self->{'*Debug'} == 1) ;
     
     	$self->{'*NumFields'} = 0 ;
 	
@@ -1590,7 +2163,7 @@ sub SQLSelect ($;$$$$$$)
 
 	foreach (@$names)
 	    {
-	    $ofunca [$i++] = $ofunc -> {lc ($_)} ;
+	    $ofunca [$i++] = $ofunc -> {$_} ;
 	    }
 	}
 
@@ -1598,10 +2171,20 @@ sub SQLSelect ($;$$$$$$)
     
 
 	
-    if ($self->{'*LongNames'} && $fields eq '*')
-	{
-	$self->{'*SelectFields'} = $self->{'*FullNames'} ;
-	}
+    if ($self->{'*LongNames'})
+        {
+        if ($fields eq '*')
+	    {
+	    $self->{'*SelectFields'} = $self->{'*FullNames'} ;
+	    }
+        else
+            {
+            my $tab4f  = $self -> {'*Table4Field'} ;
+            my @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } split (/\s*,\s*/, $fields) ;
+            shift @allfields if (lc($allfields[0]) eq 'distinct') ;
+            $self->{'*SelectFields'} = \@allfields ;
+            }
+        }
     else
 	{
 	$self->{'*SelectFields'} = $names ;
@@ -1610,6 +2193,28 @@ sub SQLSelect ($;$$$$$$)
 
     return $rc ;
     }
+
+## ----------------------------------------------------------------------------
+##
+## FECTHSIZE - returns the number of rows form the last SQLSelect
+##
+## WARNING: Not all DBD drivers returns the correct number of rows
+## so we issue a warning/error message when this function is used
+##
+
+
+
+sub FETCHSIZE 
+
+    {
+    my ($self) = @_;
+
+    die "FETCHSIZE may not supported by your DBD driver, set \$FetchsizeWarn to zero if you are sure it works. Read about \$FetchsizeWarn in the docs!"  if ($FetchsizeWarn == 2) ;
+    warn "FETCHSIZE may not supported by your DBD driver, set \$FetchsizeWarn to zero if you are sure it works. Read about \$FetchsizeWarn in the docs!"  if ($FetchsizeWarn == 1) ;
+        
+    return $self->{'*SelectedRows'};
+    }   
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -1661,6 +2266,8 @@ sub FETCH
 		    {
 		    $self->{'*EOD'} = 1 ;
 		    $sth -> finish ;
+                    print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+                    undef $self->{'*StHdl'} ;
 		    last ;
 		    }
                 
@@ -1679,6 +2286,8 @@ sub FETCH
 		    {
 		    $self->{'*EOD'} = 1 ;
 		    $sth -> finish ;
+                    print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+                    undef $self->{'*StHdl'} ;
 		    last ;
 		    }
 		$row++ ;
@@ -1697,30 +2306,33 @@ sub FETCH
                 {
                 $row++ ;
                 $dat = {} ;
-                my $obj = tie %$dat, 'DBIx::Recordset::Row', $self, $fld, $arr ;
+                if ($self -> {'*TieRow'})
+		    {
+		    my $obj = tie %$dat, 'DBIx::Recordset::Row', $self, $fld, $arr ;
+		    $self->{'*LastKey'} = $obj -> FETCH ($self -> {'*PrimKey'}) ;
+		    }
+		else
+		    {
+		    @$dat{@$fld} = @$arr ;
                 
-                #tie %$dat, 'DBIx::Recordset::Row', $self, ['id'], [333] ;
-                #print LOG "new dat = $dat  row = $row  fetch=$fetch  ref = " . ref ($dat) . " tied = " . ref (tied(%$dat)) . " fetch = $fetch  self = $self\n"  ;
-                #return $h ;
-                #my $i  ;
-                #my %p ;
-                #for ($i = 0; $i <= $#{$fld}; $i++)
-                #    {
-                #    print "arr  $$fld[$i] = $$arr[$i]\n" ;
-                #    }
-                #
-                #my $v ;
-                #my $k ;
-                #while (($k, $v) = each (%$dat))
-                #    {
-                #    print "hash $k = $v\n" ;
-                #    }
 
-                #
-                #tie %$h, 'DBIx::Recordset::Row', $self, \%p ;
-                
+		    my $nf = $self -> {'*NameField'} || $self -> TableAttr ('!NameField') ;
+		    if ($nf)
+			{
+			if (!ref $nf)
+			    {
+			    $dat -> {'!Name'} = $dat -> {uc($nf)} || $dat -> {$nf} ;
+			    }
+			else
+			    {    
+			    $dat -> {'!Name'} = join (' ', map { $dat -> {uc ($_)} || $dat -> {$_} } @$nf) ;
+			    }
+			}
+
+                    $self->{'*LastKey'} = $dat -> {$self -> {'*PrimKey'}} ;
+		    }
+            
                 $data -> [$fetch] = $dat ;
-                $self->{'*LastKey'} = $obj -> FETCH ($self -> {'*PrimKey'}) ;
                 }
             else
                 {
@@ -1844,6 +2456,9 @@ sub Prev ($)
 
 sub Curr ($;$)
     {
+    my $lr ;
+    return $lr if ($lr = $self->{'*LastRecord'}) ; 
+
     my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'} ;
     my $rec = $_[0] -> FETCH ($n) ;
     return $rec if (defined ($rec) || !$_[1]) ;
@@ -2001,13 +2616,19 @@ sub BuildFields
 
 	$tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', map { $v = $tables{$_} ; $v =~ s/=/*=/ ; $v } keys %tables) ;
 	}
-    else 
+    elsif ($leftjoin == 3)
 	{
 	my $v ;
 
 	$tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', map { "$tables{$_} (+)" } keys %tables) ;
 	}
+    else 
+	{
+	my $v ;
 
+	$rtabrel = $table . ',' . join (',', map { "OUTER $_ " } keys %tables) ;
+	$tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', values %tables) ;
+	}
 
     return ($rfields, $rtables, $rtabrel, $tabrel, \@replace) ;
     }
@@ -2019,7 +2640,8 @@ sub BuildFields
 ##
 ## \%where/$where   = hash of which the SQL Where condition is build
 ##                    or SQL Where condition as text
-## \@bind_values    = returns the bind_value array if placeholder supported
+## \@bind_values    = returns the bind_value array for placeholder supported
+## \@bind_types     = returns the bind_type  array for placeholder supported
 ##
 ##
 ## Builds the WHERE condition for SELECT, UPDATE, DELETE 
@@ -2050,21 +2672,21 @@ sub BuildFields
 ##	$where		    where as string
 ##
 
-sub BuildWhere ($$)
+sub BuildWhere ($$$$)
 
     {
-    my ($self, $where, $bind_values) = @_ ;
+    my ($self, $where, $bind_values, $bind_types) = @_ ;
     
     
     my $expr = '' ;
     my $primkey ;
     my $Quote = $self->{'*Quote'} ;
     my $Debug = $self->{'*Debug'} ;
-    my $placeholders = $self->{'*Placeholders'} ;
     my $ignore       = $self->{'*IgnoreEmpty'} ;
     my $nullop       = $self->{'*NullOperator'} ;
     my $linkname     = $self->{'*LinkName'} ;
     my $tab4f        = $self->{'*Table4Field'} ;
+    my $type4f       = $self->{'*Type4Field'} ;
     my $ifunc        = $self->{'*InputFunctions'} ;
 	
     
@@ -2073,24 +2695,25 @@ sub BuildWhere ($$)
         $expr = $where ;
         if ($Debug > 2) { print LOG "DB:  Literal where -> $expr\n" ; }
         }
-    elsif (defined ($primkey = $self->{'*PrimKey'}) && defined ($$where{$primkey}))
-        {
+    elsif (exists $where -> {'$where'})
+        { # We have the where as string
+        $expr = $where -> {'$where'} ;
+        if ($Debug > 2) { print LOG "DB:  Literal where -> $expr\n" ; }
+        }
+    elsif (defined ($primkey = $self->{'*PrimKey'}) && defined ($where -> {$primkey}) && 
+           (!defined ($where -> {"\*$primkey"}) || $where -> {"\*$primkey"} eq '='))
+        { # simplify where when ask for <primkey> = ?
         my $oper = $$where{"\*$primkey"} || '=' ;
 
         my $pkey = $primkey ;
         $pkey = "$tab4f->{$primkey}.$primkey" if ($linkname && !($primkey =~ /\./)) ;
 
         # any input conversion ?
-	my $val = $$where{$primkey} ;
+	my $val = $where -> {$primkey} ;
 	my $if  = $ifunc -> {$primkey} ; 
 	$val = &{$if} ($val) if ($if) ;
 
-        if ($placeholders)
-            { $expr = "$pkey$oper ? "; push @$bind_values, $val ; }
-        elsif ($$Quote{$primkey})
-            { $expr = "$pkey$oper" . $self->{'*DBHdl'} -> quote ($val) ; }
-        else        
-            { local $^W = 0 ; $expr = "$pkey$oper" . ($val+0) ; }
+        $expr = "$pkey$oper ? "; push @$bind_values, $val ; push @$bind_types, $type4f -> {$primkey} ;
         if ($Debug > 2) { print LOG "DB:  Primary Key $primkey found -> $expr\n" ; }
         }
     else
@@ -2126,6 +2749,9 @@ sub BuildWhere ($$)
  
         while (($key, $val) = each (%$where))
             {
+            my @multtypes ;
+            my @multval ;
+            
             $type  = substr ($key, 0, 1) || ' ' ;
             $val = undef if ($ignore > 1 && $val eq '') ;
 
@@ -2147,7 +2773,7 @@ sub BuildWhere ($$)
                         {
                         if ($Debug > 3) { print LOG "DB:  Composite Field processing $field\n" ; }
 
-                        if (!defined ($$Quote{lc($field)}))
+                        if (!defined ($$Quote{$PreserveCase?$field:lc ($field)}))
                             {
                             if ($Debug > 2) { print LOG "DB:  Ignore non existing Composite Field $field\n" ; }
                             next ;
@@ -2159,21 +2785,25 @@ sub BuildWhere ($$)
 
                         if (($uright = $unaryoperators{lc($op)}))
 			    {
-    			    $multcnt-- ;
-			    if ($uright == 1)
+    			    if ($uright == 1)
 				{ $fieldexp = "$fieldexp $fconj $field $op" }
 			    else
 				{ $fieldexp = "$fieldexp $fconj $op $field" }
 			    }
-			elsif ($placeholders && $type ne '\\')
-                            { $fieldexp = "$fieldexp $fconj $field $op \$val" ; $multcnt++ ; }
-                        elsif (!defined ($val))
-                            { $fieldexp = "$fieldexp $fconj $field $nullop NULL" ; }
-                        elsif ($$Quote{lc($field)} && $type ne '\\')
-                            { $fieldexp = "$fieldexp $fconj $field $op '\$val'" ; }
+                        elsif ($type eq '\\') 
+                            { $fieldexp = "$fieldexp $fconj $field $op $val" ; }
+                        elsif (defined ($val)) 
+                            { 
+                            $fieldexp = "$fieldexp $fconj $field $op ?" ;
+                            push @multtypes, $type4f -> {$field} ; 
+                            $multcnt++ ;
+                            }
+                        elsif ($op eq '<>')
+                            { $fieldexp = "$fieldexp $fconj $field $nullop not NULL" ; }
                         else
-                            { $fieldexp = "$fieldexp $fconj $field $op \" . (\$val+0) . \"" ; }
+                            { $fieldexp = "$fieldexp $fconj $field $nullop NULL" ; }
 
+                        
                         $fconj ||= $$where{'$compconj'} || ' or ' ; 
 
                         if ($Debug > 3) { print LOG "DB:  Composite Field get $fieldexp\n" ; }
@@ -2185,13 +2815,13 @@ sub BuildWhere ($$)
                     }
                 else
                     { # single field
-                    $multcnt = 1 ;
+                    $multcnt = 0 ;
                     if ($type eq '\\' || $type eq '#' || $type eq "'")
                         { # remove leading backslash, # or '
                         $key = substr ($key, 1) ;
                         }
 
-                    $lkey = lc ($key) ;
+                    $lkey = $PreserveCase?$key:lc ($key) ;
 
                     	    
 		    if ($type eq "'")
@@ -2227,69 +2857,49 @@ sub BuildWhere ($$)
 
                     if (($uright = $unaryoperators{lc($op)}))
 			{
-			$multcnt-- ;
 			if ($uright == 1)
 			    { $fieldexp = "$key $op" }
 			else
 			    { $fieldexp = "$op $key" }
 			}
-                    elsif (!$placeholders && defined ($val) && $$Quote{$lkey} && $type ne '\\')
-                        { $fieldexp = "$key $op '\$val'" ; }
-                    elsif (defined ($val) || $placeholders)
-                        { $fieldexp = "$key $op \$val" ; }
+                    elsif ($type eq '\\') 
+                        { $fieldexp = "$key $op $val" ; }
+                    elsif (defined ($val)) 
+                        { 
+                        $fieldexp = "$key $op ?" ; 
+                        push @multtypes, $type4f -> {$lkey} ;
+                        $multcnt++ ;
+                        }
+                    elsif ($op eq '<>')
+                        { $fieldexp = "$key $nullop not NULL" ; }
                     else
                         { $fieldexp = "$key $nullop NULL" ; }
 
+                    
                     if ($Debug > 3) { print LOG "DB:  Single Field gives $fieldexp\n" ; }
                     }
     
     
-                @mvals = split (/$mvalsplit/, $val) ;
-                if ($#mvals > 0)
-                    { # multiplie values for that field
-                
-                    $vexp  = '' ;
-                    $vconj = '' ;
-                
-                    foreach $val (@mvals)
-                        {
-                        if ($placeholders)
-                            {
-                            my $i ;
-
-                            for ($i = 0; $i < $multcnt; $i++)
-                                { push @$bind_values, $val ; }
-                            $val = '?' ;
-                            }
-                        elsif (!defined ($val))
-                            {
-                            $val = 'NULL' ;
-                            }
-                                                
-                        $vexp = "$vexp $vconj " . eval "\"($fieldexp)\"" ;
-                        $vconj ||= $$where{'$valueconj'} || ' or ' ; 
-                        }                
-                    }
+                if (!defined ($val))
+                    { @mvals = (undef) }
+                elsif ($val eq '')
+                    { @mvals = ('') }
                 else
-                    {
-                    if ($placeholders && $type ne '\\')
-                        {
-                        my $i ;
-                        
-                        for ($i = 0; $i < $multcnt; $i++)
-                            { push @$bind_values, $val ; }
-                        $val = '?' ;
-                        }
-                    elsif (!defined ($val))
-                        {
-                        $val = 'NULL' ;
-                        }
-                        
-                    $vexp = eval "\"($fieldexp)\"" ;
-                    }
+                    { @mvals = split (/$mvalsplit/, $val) ; }
+                $vexp  = '' ;
+                $vconj = '' ;
+                my $i ;
 
-                if ($Debug > 3) { print LOG "DB:  Key $key gives $vexp\n" ; }
-            
+                foreach $val (@mvals)
+                    {
+                    $i = $multcnt ;
+                    push @$bind_values, $val while ($i-- > 0) ;
+                    push @$bind_types, @multtypes ;
+                    $vexp = "$vexp $vconj ($fieldexp)" ;
+                    $vconj ||= $$where{'$valueconj'} || ' or ' ; 
+                    }                
+
+                if ($Debug > 3) { print LOG "DB:  Key $key gives $vexp bind_values = <@$bind_values> bind_types=<@$bind_types>\n" ; }
             
                 $expr = "$expr $econj ($vexp)" ;
             
@@ -2319,35 +2929,31 @@ sub BuildWhere ($$)
     return $expr ;
     }
 
+
 ## ----------------------------------------------------------------------------
 ##
-## Check fields ...
+## Dirty - see if there is at least one dirty row
 ##
-## delete all fields which do not belong to this recordset from hashref $data
 ##
 
-
-sub CheckFields ($\%\%)
-
+sub Dirty
     {
-    my ($self, $data, $cdata) = @_ ;
+    my $self = shift;
+    my $data = $Data{ $self->{'*Id'} };
     
-    my $key ;
-    my $val ;
-
-    my $Quote = $self->{'*Quote'} ;
-
-    while (($key, $val) = each (%$data))
+    return undef unless ( ref($data) eq 'ARRAY');
+    
+    foreach my $rowdata (@$data) 
         {
-        if (defined ($$Quote{lc($key)}))
-            { 
-            $$cdata{$key} = $val ;
-            }
-        elsif ($self->{'*Debug'} > 2)  { print LOG "DB:  CheckFields del $key = $val \n" ; }
-        }
-
+        print LOG "DIRTY: rowref $rowdata\n" if $self->{'*Debug'} > 4;
+        next unless ((ref($rowdata) eq 'HASH')
+                      and eval { tied(%$rowdata)->isa('DBIx::Recordset::Row') } );
+        return 1 if tied(%$rowdata)->Dirty ;
+        };
+    return 0;	# clean
     }
 
+ 
 ## ----------------------------------------------------------------------------
 ##
 ## Fush ...
@@ -2376,44 +2982,40 @@ sub Flush
     $self -> {'*UndefKey'} = undef ; # invalidate record for undef hashkey
     $self->{'*LastRecord'} = undef ; 
     $self->{'*LastRecordFetch'} = undef ; 
+    if (defined ($self->{'*StHdl'})) 
+        {
+        $self->{'*StHdl'} -> finish () ;
+        print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+        undef $self->{'*StHdl'} ;
+        }
+
 
     eval
         {    
-
+        my $err ;
+        
         foreach $dat (@$data)
 	    {
-            $obj = tied (%$dat) ;
+            $obj = (ref ($dat) eq 'HASH')?tied (%$dat):undef ;
             if (defined ($obj)) 
                 {
-                #print "rs=" . ref ($obj->{'*Recordset'}) . "\n" ; 
-            
-                #Devel::Peek::Dump ($obj -> {'*Recordset'}, 1) ;
-            
-                $obj -> Flush () or $rc = undef ;
+                # isolate row update errors
+                eval 
+                    {
+                    local $SIG{__DIE__};
+                    $obj -> Flush ();
+                    } or $rc = undef ;
+
+                $err ||= $@ ;
                 $obj -> {'*Recordset'} = undef if ($release) ;
                 }
-
-
-	    #if ($dat && !$obj)
-            # 		{
-	    #	print LOG "FLUSH RS untied hash\n" ;
-	    #	my $k ;
-	    #	my $v ;
-	    #	
-	    #	while (($k, $v) = each (%$dat))
-	    #		{
-	    #		print "$k = $v\n" ;
-	    #		}
-	    #	}
-	    #		
-
 	    }
+        die $err if ($err) ;
         } ;
-
 
     $self -> {'*InFlush'} = 0 ;
 
-    croak $@ if ($@) ;
+    $self -> savecroak ($@) if ($@) ;
 
     return $rc ;
     }
@@ -2440,80 +3042,75 @@ sub Insert ($\%)
         ($self = $newself) or return undef ;
         }
 
-    my $placeholders = $self->{'*Placeholders'} ;
-
     my @bind_values ;
+    my @bind_types ;
     my @qvals ;
     my @keys ;
     my $key ;
     my $val ;
     my $q ;
 
+    my $type4f = $self->{'*Type4Field'} ;
     my $Quote = $self->{'*Quote'} ;
     my $ifunc = $self->{'*InputFunctions'} ;
-
-    if ($placeholders)
+    my $irfunc = $self->{'*InputFunctionsRequiredOnInsert'} ;
+        
+    while (($key, $val) = each (%$data))
         {
-        while (($key, $val) = each (%$data))
+        $val = $$val if (ref ($val) eq 'SCALAR') ;
+        # any input conversion ?
+	my $if = $ifunc -> {$key} ;
+	$val = &{$if} ($val, 'insert', $data) if ($if) ;
+	next if (!defined ($val)) ; # skip NULL values
+	if ($key =~ /^\\(.*?)$/)
+	    {
+            push @qvals, $val ;
+            push @keys, $1 ;
+            }
+	elsif (defined ($$Quote{$PreserveCase?$key:lc ($key)}))
             {
-            $val = $$val if (ref ($val) eq 'SCALAR') ;
-            # any input conversion ?
+            push @bind_values ,$val ;
+            push @qvals, '?' ;
+            push @keys, $key ;
+            push @bind_types, $type4f -> {$PreserveCase?$key:lc ($key)} ;
+            }
+        }
+
+    if ($#qvals > -1)
+        {
+        foreach $key (@$irfunc)
+            {
+            next if (exists ($data -> {$key})) ; # input function alread applied
 	    my $if = $ifunc -> {$key} ;
-	    $val = &{$if} ($val) if ($if) ;
+	    $val = &{$if} (undef, 'insert', $data) if ($if) ;
 	    next if (!defined ($val)) ; # skip NULL values
 	    if ($key =~ /^\\(.*?)$/)
 		{
                 push @qvals, $val ;
                 push @keys, $1 ;
                 }
-	    elsif (defined ($$Quote{lc($key)}))
+	    elsif (defined ($$Quote{$PreserveCase?$key:lc ($key)}))
                 {
                 push @bind_values ,$val ;
                 push @qvals, '?' ;
                 push @keys, $key ;
+                push @bind_types, $type4f -> {$PreserveCase?$key:lc ($key)} ;
                 }
             }
         }
-    else
-        {
-        local $^W = 0 ;
-        while (($key, $val) = each (%$data))
-            {
-            $val = $$val if (ref ($val) eq 'SCALAR') ;
-            # any input conversion ?
-	    my $if = $ifunc -> {$key} ;
-	    $val = &{$if} ($val) if ($if) ;
-	    next if (!defined ($val)) ; # skip NULL values
-	    if ($key =~ /^\\(.*?)$/)
-		{
-                push @qvals, $val ;
-                push @keys, $1 ;
-                }
-            elsif (($q = $$Quote{lc($key)}))
-                {
-                push @qvals, $self->{'*DBHdl'} -> quote ($val) ;
-                push @keys, $key ;
-                }
-            elsif (defined ($q))
-                {
-                push @qvals, ($if?$val:($val+0)) ;
-                push @keys, $key ;
-                }
-            }
-        }
-
-    my $rc = undef ;
+    
+    my $rc  ;
 
     if ($#qvals > -1)
         {
         my $valstr = join (',', @qvals) ;
         my $keystr = join (',', @keys) ;
 
-        $rc = $self->SQLInsert ($keystr, $valstr, \@bind_values) ;
+        $rc = $self->SQLInsert ($keystr, $valstr, \@bind_values, \@bind_types) ;
         }
     
 
-    return ($newself && defined ($rc))?*newself:$rc ;
+    return $newself?*newself:$rc ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -2539,16 +3136,24 @@ sub Update ($\%$)
 
     my $expr  ;
     my @bind_values ;
+    my @bind_types ;
     my $key ;
     my $val ;
     my @vals ;
     my $q ;
 
-    my $Quote = $self->{'*Quote'} ;
-    my $placeholders = $self->{'*Placeholders'} ;
-    my $ifunc = $self->{'*InputFunctions'} ;
+    my $type4f = $self->{'*Type4Field'} ;
     my $primkey ;
-
+    my $Quote = $self->{'*Quote'} ;
+    my $ifunc = $self->{'*InputFunctions'} ;
+    my $irfunc = $self->{'*InputFunctionsRequiredOnUpdate'} ;
+        
+    if ($irfunc)
+        {
+        map { $data -> {$_} = undef if (!exists ($data -> {$_})) } @$irfunc ;
+        }
+       
+    
     if (defined ($primkey = $self->{'*PrimKey'}))
 	{
         $val = $data -> {$primkey} ;
@@ -2575,76 +3180,42 @@ sub Update ($\%$)
     #print LOG "2 primkey = $primkey d=$data->{$primkey} w=" . ($where?$where->{$primkey}:'<undef>') . " v=$val\n" ;
     my $datacnt = 0 ; 
 
-    if ($placeholders)
+    while (($key, $val) = each (%$data))
         {
-        while (($key, $val) = each (%$data))
+        next if ($key eq $primkey) ;
+        $val = $$val if (ref ($val) eq 'SCALAR') ;
+        # any input conversion ?
+        my $if = $ifunc -> {$key} ;
+       $val = &{$if} ($val, 'update', $data, $where) if ($if) ;
+       if ($key =~ /^\\(.*?)$/)
             {
-	    next if ($key eq $primkey) ;
-	    $val = $$val if (ref ($val) eq 'SCALAR') ;
-            # any input conversion ?
-	    my $if = $ifunc -> {$key} ;
-	    $val = &{$if} ($val) if ($if) ;
-	    if ($key =~ /^\\(.*?)$/)
-		{
-                push @vals, "$1=$val" ;
-                $datacnt++ ;
-                }
-            elsif (defined ($$Quote{lc($key)}))
-                { 
-                push @vals, "$key=?" ;
-                push @bind_values, $val ;
-                $datacnt++ ;
-                }
+            push @vals, "$1=$val" ;
+            $datacnt++ ;
             }
-        }
-    else
-        {
-        local $^W = 0 ;
-	while (($key, $val) = each (%$data))
-            {
-	    next if ($key eq $primkey) ;
-            $val = $$val if (ref ($val) eq 'SCALAR') ;
-            # any input conversion ?
-	    my $if = $ifunc -> {$key} ;
-	    $val = &{$if} ($val) if ($if) ;
-
-	    if ($key =~ /^\\(.*?)$/)
-		{ 
-		push @vals, "$1=$val" ;
-                $datacnt++ ;
-    		}
-            else
-		{
-		if (defined ($q = $$Quote{lc($key)}))
-		    {
-		    if (!defined ($val))
-			{ push @vals, "$key=NULL" ; }
-		    elsif ($q)
-			{ push @vals, "$key=" . $self->{'*DBHdl'} -> quote ($val) ; }
-		    else
-			{ push @vals, "$key=" . ($if?$val:($val+0)) ; }
-                    $datacnt++ ;
-		    }
-		}
-
+        elsif (defined ($$Quote{$PreserveCase?$key:lc ($key)}))
+            { 
+            push @vals, "$key=?" ;
+            push @bind_values, $val ;
+            push @bind_types, $type4f -> {$PreserveCase?$key:lc ($key)} ;
+            $datacnt++ ;
             }
         }
 
-    my $rc = 0 ;
+    my $rc = '' ;
     if ($datacnt)
-	{
+        {
 	my $valstr = join (',', @vals) ;
 
 	if (defined ($where))
-	    { $expr = $self->BuildWhere ($where, \@bind_values) ; }
+	    { $expr = $self->BuildWhere ($where, \@bind_values, \@bind_types) ; }
 	else
-	    { $expr = $self->BuildWhere ($data, \@bind_values) ; }
+	    { $expr = $self->BuildWhere ($data, \@bind_values, \@bind_types) ; }
 
 
-	$rc = $self->SQLUpdate ($valstr, $expr, \@bind_values) ;
+	$rc = $self->SQLUpdate ($valstr, $expr, \@bind_values, \@bind_types) ;
 	}
 
-    return ($newself && defined ($rc))?*newself:$rc ;
+    return $newself?*newself:$rc ;
     }
 
 
@@ -2679,7 +3250,7 @@ sub UpdateInsert ($\%)
         {
         $rc = $self -> Insert ($fdat) ;
         }
-    return ($newself && defined ($rc))?*newself:$rc ;
+    return $newself?*newself:$rc ;
     }
 
 
@@ -2706,12 +3277,13 @@ sub Delete ($$)
         }
 
     my @bind_values ;
-    my $expr = $self->BuildWhere ($where,\@bind_values) ;
+    my @bind_types ;
+    my $expr = $self->BuildWhere ($where,\@bind_values,\@bind_types) ;
 
     $self->{'*LastKey'} = undef ;
 
-    my $rc = $self->SQLDelete ($expr, \@bind_values) ;
-    return ($newself && defined ($rc))?*newself:$rc ;
+    my $rc = $self->SQLDelete ($expr, \@bind_values, \@bind_types) ;
+    return $newself?*newself:$rc ;
     }
 
 
@@ -2743,10 +3315,11 @@ sub Select (;$$$$$)
         }
 
     my @bind_values ;
-    my $expr = $self->BuildWhere ($where, \@bind_values) ;
+    my @bind_types ;
+    my $expr = $self->BuildWhere ($where, \@bind_values, \@bind_types) ;
 
-    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $self->{'*Order'} || $order, $group, $append, \@bind_values) ;
-    return ($newself && defined ($rc))?*newself:$rc ;
+    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $self->{'*Order'} || $order, $group, $append, \@bind_values, \@bind_types) ;
+    return $newself?*newself:$rc ;
     }
 
 
@@ -2802,8 +3375,18 @@ sub Search ($\%)
         if ($start < 0) { $start = 0 ; }
 	}
 
+    my $append = '' ;
+    if (defined ($max))
+        {
+        my $LimitOffset = DBIx::Compat::GetItem ($self->{'*Driver'}, 'LimitOffset')  ;
+        if ($LimitOffset) 
+            {
+            $append = &{$LimitOffset}($start,$$fdat{'$last'}?0:$max+1);
+            $start = 0 if ($append) ;
+            }
+        }
 
-    my $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, $$fdat{'$append'}) ; 
+    my $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, "$$fdat{'$append'} $append") ; 
     
     if ($rc && $$fdat{'$last'})
 	{ # read all until last row
@@ -2818,7 +3401,7 @@ sub Search ($\%)
     $self->{'*FetchMax'}   = $start + $max - 1 if (defined ($max)) ;
 
 
-    return ($newself && defined ($rc))?*newself:$rc ;
+    return $newself?*newself:$rc ;
     }
 
 
@@ -2872,7 +3455,7 @@ sub Execute ($\%)
         $rc = 1 if (defined ($$fdat{'=empty'}) && $rc eq  '-') ;
         }
                 
-    return ($newself && defined ($rc))?*newself:$rc ;
+    return $newself?*newself:$rc ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -2958,11 +3541,11 @@ sub PrevNextForm
     if (ref $textprev eq 'HASH')
 	{
 	$fdat = $textnext ;
-	$textprev  = $param -> {-prev} ;  
-	$textnext  = $param -> {-next} ;  
-	$textfirst = $param -> {-first} ;  
-	$textlast  = $param -> {-last} ;
-	$textgoto  = $param -> {-goto} ;
+	$textprev  = $param -> {'-prev'} ;  
+	$textnext  = $param -> {'-next'} ;  
+	$textfirst = $param -> {'-first'} ;  
+	$textlast  = $param -> {'-last'} ;
+	$textgoto  = $param -> {'-goto'} ;
 	}
 	  
   
@@ -3081,24 +3664,30 @@ sub TIEHASH
 
 sub FETCH ()
     {
-    if (wantarray)
-        {
-        my @result ;
-        my $rs = $_[0] -> {'*Recordset'} ;
-        $rs -> PushCurrRec ;
-        my $rec = $rs -> First () ;
-        while ($rec)
-            {
-            push @result, tied (%$rec) -> FETCH ($_[1]) ;
-            $rec = $rs -> Next () ;
-            }
-        $rs -> PopCurrRec ;
-        return @result ;
-        }
-    else
+#    if (wantarray)
+#        {
+#        my @result ;
+#        my $rs = $_[0] -> {'*Recordset'} ;
+#        $rs -> PushCurrRec ;
+#        my $rec = $rs -> First () ;
+#        while ($rec)
+#            {
+##            push @result, tied (%$rec) -> FETCH ($_[1]) ;
+#            push @result, $rec -> {$_[1]} ;
+#            $rec = $rs -> Next () ;
+#            }
+#        $rs -> PopCurrRec ;
+#        return @result ;
+#        }
+#    else
         {
         my $rec = $_[0] -> {'*Recordset'} -> Curr ;
-        return tied (%$rec) -> FETCH ($_[1]) if (defined ($rec)) ;
+	if (defined ($rec))
+	    {
+            my $obj ;
+	    return $obj -> FETCH ($_[1]) if ($obj = tied (%$rec)) ;
+            return $rec -> {$_[1]}  ;
+	    }
         return undef ;
         }
     }
@@ -3135,7 +3724,12 @@ sub STORE ()
 sub FIRSTKEY 
     {
     my $rec = $_[0] -> {'*Recordset'} -> Curr ;
-    return tied (%{$rec}) -> FIRSTKEY ; 
+    my $obj = tied (%{$rec}) ;
+
+    return tied (%{$rec}) -> FIRSTKEY if ($obj) ;
+    
+    my $k = keys %$rec ;
+    return each %$rec ;
     }
 
 
@@ -3144,7 +3738,10 @@ sub FIRSTKEY
 sub NEXTKEY 
     {
     my $rec = $_[0] -> {'*Recordset'} -> Curr ;
-    return tied (%{$rec}) -> NEXTKEY ; 
+    my $obj = tied (%{$rec}) ;
+
+    return tied (%{$rec}) -> NEXTKEY if ($obj) ; 
+    return each %$rec ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -3175,13 +3772,21 @@ sub DESTROY
 
     {
     my $self = shift ;
+    my $orgerr = $@ ;
+    local $@ ;
 
-    $self -> {'*Recordset'} -> ReleaseRecords () ;
+    eval 
+	{ 
+
+	$self -> {'*Recordset'} -> ReleaseRecords () if (defined ($self -> {'*Recordset'})) ;
     
-	{
-	local $^W = 0 ;
-        print DBIx::Recordset::LOG "DB:  ::CurrRow::DESTROY\n" if ($self -> {'*Recordset'} -> {'*Debug'} > 3) ;
-	}
+	    {
+	    local $^W = 0 ;
+	    print DBIx::Recordset::LOG "DB:  ::CurrRow::DESTROY\n" if ($self -> {'*Recordset'} -> {'*Debug'} > 3) ;
+	    }
+	} ;
+    $self -> savecroak ($@) if (!$orgerr && $@) ;
+    warn $@ if ($orgerr && $@) ;
     }
 
 ##########################################################################################
@@ -3248,12 +3853,7 @@ sub FETCH
 
     if (!defined ($rs->{'*LastKey'}) || $fetch ne $rs->{'*LastKey'})
         {
-        if ($rs->{'*Placeholders'})
-            { $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, undef, undef, [$fetch]) or return undef ; }
-        elsif ($rs->{'*Quote'}{$rs->{'*PrimKey'}})
-            { $rs->SQLSelect ("$rs->{'*PrimKey'} = " . $rs->{'*DBHdl'} -> quote ($fetch)) or return undef ; }
-        else        
-            { $rs->SQLSelect ("$rs->{'*PrimKey'} = " . ($fetch+0)) or return undef ; }
+        $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, undef, undef, [$fetch], [$rs->{'*Type4Field'}{$rs->{'*PrimKey'}}]) or return undef ; 
     
         $h = $rs -> FETCH (0) ;
         }
@@ -3354,12 +3954,7 @@ sub DELETE
     
     $rs->{'*LastKey'} = undef ;
     
-    if ($rs->{'*Placeholders'})
-        { $rs->SQLDelete ("$rs->{'*PrimKey'} = ?", [$key]) or return undef ; }
-    elsif ($rs->{'*Quote'}{$rs->{'*PrimKey'}})
-        { $rs->SQLDelete ("$rs->{'*PrimKey'} = " . $rs->{'*DBHdl'} -> quote ($key)) or return undef ; }
-    else        
-        { $rs->SQLDelete ("$rs->{'*PrimKey'} = " . ($key+0)) or return undef ; }
+    $rs->SQLDelete ("$rs->{'*PrimKey'} = ?", [$key], [$rs->{'*Type4Field'}{$rs->{'*PrimKey'}}]) or return undef ; 
 
     return 1 ;
     }
@@ -3376,6 +3971,13 @@ sub CLEAR
     } 
 
 ## ----------------------------------------------------------------------------
+##
+## Dirty  - see if there are unsaved changes
+##
+
+sub Dirty { return $_[0]->{'*Recordset'}->Dirty() }
+ 
+## ----------------------------------------------------------------------------
 
 sub Flush
 
@@ -3389,13 +3991,21 @@ sub DESTROY
 
     {
     my $self = shift ;
-    
-    $self -> {'*Recordset'} -> ReleaseRecords () ;
+    my $orgerr = $@ ;
+    local $@ ;
 
-	{
-	local $^W = 0 ;
-        print DBIx::Recordset::LOG "DB:  ::Hash::DESTROY\n" if ($self -> {'*Recordset'} -> {'*Debug'} > 3) ;
-	}
+    eval 
+	{ 
+
+	$self -> {'*Recordset'} -> ReleaseRecords ()  if (defined ($self -> {'*Recordset'})) ;
+
+	    {
+	    local $^W = 0 ;
+	    print DBIx::Recordset::LOG "DB:  ::Hash::DESTROY\n" if ($self -> {'*Recordset'} -> {'*Debug'} > 3) ;
+	    }
+	} ;
+    $self -> savecroak ($@) if (!$orgerr && $@) ;
+    warn $@ if ($orgerr && $@) ;
     }
 
 ##########################################################################################
@@ -3425,11 +4035,10 @@ sub TIEHASH
             my $dirty = 0 ;
             $self->{'*new'}     = 1 ;                  # mark it as new record
             
-            
             my $lk ;
             while (($k, $v) = each (%$names))
                 {
-                $lk = lc ($k) ;
+                $lk = $DBIx::Recordset::PreserveCase?$k:lc ($k) ;
                 # store the value and remeber it for later update
                 $upd ->{$lk} = \($data->{$lk} = $v) ;
                 $dirty = 1 ;
@@ -3440,7 +4049,7 @@ sub TIEHASH
             {
             while (($k, $v) = each (%$names))
                 {
-                $data -> {lc($k)} = $v ;
+                $data -> {$DBIx::Recordset::PreserveCase?$k:lc ($k)} = $v ;
                 }
             }
         }
@@ -3453,7 +4062,7 @@ sub TIEHASH
 	if ($linkname < 2)
             {    
             $i = -1 ;
-	    %$data = map { $i++ ; lc($$names[$i]) => ($ofunc->[$i]?(&{$ofunc->[$i]}($_)):$_) } @$dat if ($dat) ;
+	    %$data = map { $i++ ; ($DBIx::Recordset::PreserveCase?$$names[$i]:lc($$names[$i])) => ($ofunc->[$i]?(&{$ofunc->[$i]}($_)):$_) } @$dat if ($dat) ;
             }
         elsif ($linkname < 3)
             {
@@ -3463,7 +4072,7 @@ sub TIEHASH
                 
             foreach $r (@$repl)
                 {
-                $n = lc ($names -> [$i]) ;
+                $n = $DBIx::Recordset::PreserveCase?$names -> [$i]:lc ($names -> [$i]) ;
                 $of = $ofunc -> [$i] ;
 		$data -> {$n} = ($of?(&{$of}($dat->[$i])):$dat->[$i]) ;
                 $data -> {uc($n)} = join (' ', map ({ ($ofunc->[$_]?(&{$ofunc->[$_]}($dat->[$_])):$dat->[$_])} @$r)) if ($#$r > 0 || $r -> [0] != $i) ;
@@ -3477,7 +4086,7 @@ sub TIEHASH
                 
             foreach $r (@$repl)
                 {
-                $data -> {lc ($$names[$i])} = join (' ', map ({ ($ofunc->[$_]?(&{$ofunc->[$_]}($dat->[$_])):$dat->[$_])} @$r)) ;
+                $data -> {($DBIx::Recordset::PreserveCase?$$names[$i]:lc($$names[$i]))} = join (' ', map ({ ($ofunc->[$_]?(&{$ofunc->[$_]}($dat->[$_])):$dat->[$_])} @$r)) ;
 		#print LOG "###repl $r -> $data->{$$names[$i]}\n" ;
                 $i++ ;
                 }
@@ -3618,6 +4227,13 @@ sub CLEAR ($)
 
 ## ----------------------------------------------------------------------------
 ##
+## report the cleanless of the row
+##
+
+sub Dirty { return $_[0]->{'*dirty'} }
+
+## ----------------------------------------------------------------------------
+##
 ## Flush data to database if row is dirty
 ##
 
@@ -3633,13 +4249,13 @@ sub Flush
     if ($self -> {'*dirty'}) 
         {
         my $rc ;
-	print DBIx::Recordset::LOG "DB:  Row::Flush id=$rs->{'*Id'} $self\n" if ($rs->{'*Debug'} > 3) ;
+        print DBIx::Recordset::LOG "DB:  Row::Flush id=$rs->{'*Id'} $self\n" if ($rs->{'*Debug'} > 3) ;
 
         my $dat = $self -> {'*upd'} ;
         if ($self -> {'*new'})
             {
             $rc = $rs -> Insert ($dat)  ;
-	    }
+            }
         else
             {
             my $pko ;
@@ -3658,11 +4274,15 @@ sub Flush
                 {
                 $rc = $rs -> Update ($dat, {$pk => $pko} )  ;
                 }
+            if ($rc != 1 && $rc ne '')
+                { # must excatly be one row!
+                print DBIx::Recordset::LOG "DB:  ERROR: Row Update has updated $rc rows instead of one ($rs->{'*LastSQLStatement'})\n" if ($rs->{'*Debug'}) ;
+                $rs -> savecroak ("DB:  ERROR: Row Update has updated $rc rows instead of one ($rs->{'*LastSQLStatement'})") ;            
+                }	      
             }
         
-	return undef if (!defined($rc)) ;
 
-	delete $self -> {'*new'} ;
+        delete $self -> {'*new'} ;
         delete $self -> {'*dirty'} ;
         $self -> {'*upd'} = {} ;
         }
@@ -3670,13 +4290,16 @@ sub Flush
     my $k ;
     my $v ;
     my $lrs ;
+    my $rname ;
     # "each" is not reentrant !!!!!!!!!!!!!!
     #while (($k, $v) = each (%{$rs -> {'*Links'}}))
     foreach $k (keys %{$rs -> {'*Links'}})
         { # Flush linked tables
         
         $lrs = $self->{'*data'}{$k} ;
-        ${$lrs} -> Flush () if (defined ($lrs)) ;
+        $rname = '' ;
+        $rname = eval {ref ($$lrs)} ;
+        ${$lrs} -> Flush () if ($rname eq 'DBIx::Recordset') ; #if (defined ($lrs) && ref ($lrs) && defined ($$lrs) && ) ;
         }
 
     return 1 ;
@@ -3690,13 +4313,27 @@ sub DESTROY
 
     {
     my $self = shift ;
-    
-	{
-	local $^W = 0 ;
-        print DBIx::Recordset::LOG "DB:  Row::DESTROY\n" if ($DBIx::Recordset::Debug > 2 || $self -> {'*Recordset'} -> {'*Debug'} > 3) ;
-	}
+    my $orgerr = $@ ;
+    local $@ ;
 
-    $self -> Flush () ;
+    eval 
+	{ 
+    
+	    {
+	    local $^W = 0 ;
+	    print DBIx::Recordset::LOG "DB:  Row::DESTROY\n" if ($DBIx::Recordset::Debug > 2 || $self -> {'*Recordset'} -> {'*Debug'} > 3) ;
+	    }
+
+	$self -> Flush () ;
+	} ;
+    if (!$orgerr && $@)
+        {
+        Carp::croak $@ ;
+        }
+    elsif ($orgerr && $@)   
+        {
+        warn $@  ;
+        }
     }
 
 
@@ -3705,6 +4342,7 @@ sub DESTROY
 1;
 __END__
 
+=pod
 
 =head1 NAME
 
@@ -3762,6 +4400,10 @@ description of the valid arguments first.
 
 All parameters starting with an '!' are only recognized at setup time.
 If you specify them in later function calls they will be ignored.
+You can also preset these parameters with the TableAttr method of 
+DBIx::Database, this gives you the chance to presetup most parameters
+for the whole database and they will be use everytime you create a new
+DBIx::Recordset object, without spedifing it everytime.
 
 =item B<!DataSource>
 
@@ -3786,6 +4428,10 @@ Takes Driver/DB/Host from the given database object.
 
 Takes Driver/DB/Host from the database object which is saved under
 the given name ($saveas parameter to DBIx::Database -> new)
+
+=item an DBI database handle
+
+Uses given database handle.
 
 =back
 
@@ -3828,12 +4474,19 @@ from a query. Which one this actually is depends on the DBD driver.
 NOTE 4: Some databases (e.g. mSQL) require you to always qualify a fieldname
 with a tablename if more than one table is accessed in one query.
 
+=item B<!TableFilter>
+
+The TableFilter parameter specifies which tables should be honoured when DBIx::Recordset
+searchs for links between tables (see below). When given as parameter to DBIx::Database
+it filters for which tables DBIx::Database retrieves metadata. Also the DBIx::Recordset
+link detection tries to use this values as an prefix of table names, so you can leave out
+this prefix, when you write a fieldname that should be detected as a link to another table.
+
+
 =item B<!LongNames>
 
 When set to 1 the keys of the hash which is returned for each record not only
-consits of the fieldname, but are build in the form table.field. In the current
-version this only works if you retrieve all fields (i.e. !Field is missing or
-contains '*')
+consits of the fieldname, but are build in the form table.field.
 
 =item B<!Order>
 
@@ -3882,11 +4535,11 @@ used in a B<SELECT> statement. (See also L<!TabRelation>)
 
 =item B<!PrimKey>
 
-Name of primary key. If specified, DBIx::Recordset assumes that this is a unique
-key to the given table(s). DBIx::Recordset can not verify this; you are responsible
-for specifying the right key. If such a primary key exists in your table, you
-should specify it here, because it helps DBIx::Recordset to optimize the building
-of WHERE expressions.
+Name of primary key. When this key appears in a where parameter list
+(see below), DBIx::Recordset will ignore all other keys in the list,
+speeding up WHERE expression preparation and execution. Note that this
+key does NOT have to correspond to a field tagged as PRIMARY KEY in a
+CREATE TABLE statement.
 
 =item B<!WriteMode>
 
@@ -3902,7 +4555,7 @@ SQL statements to the database engine to write/delete any data.
 
 =over 4
 
-=item DBIx::Recordset::wmREADONLY (0)
+=item DBIx::Recordset::wmNONE (0)
 
 Allow B<no> write access to the table(s)
 
@@ -3984,7 +4637,7 @@ Filters can be used to pre/post-process the data which is read from/written to t
 The !Filter parameter takes an hash reference which contains the filter fucntions. If the key
 is numeric, it is treaded as a type value and the filter is applied to all fields of that 
 type. If the key if alphanumeric, the filter applies to the named field. Every filter 
-description consistst of an array which two element, the first element must contain the input
+description consistst of an array with at least two elements, the first element must contain the input
 function and the second element must contain the output function. Either may be undef, if only
 one of them are neccessary. The data is passed to the input function before it is written to the
 database. The input function must return the value in the correct format for the database. The output
@@ -4015,6 +4668,16 @@ does this for the fields with the name datefield.
 
 The B<!Filter> parameter can also be passed to the function B<TableAttr> of the B<DBIx::Database>
 object. In this case it applies to all DBIx::Recordset objects, which use this tables.
+
+Optional an thrid parameter can be specified. It could be set to C<DBIx::Recordset::rqInsert> or
+C<DBIx::Recordset::rqUpdate> or the sum of both. If set, the InputFunction (which is call during
+UPDATE or INSERT) is always called for this field in updates and/or inserts depending on the value.
+If there is no data specified for this field
+as argument to an function which causes an update/insert, the InputFunction is call with an
+argument of B<undef>.
+
+During UPDATE and INSERT the input function gets either the string 'insert' or 'update' passed as
+second parameter.
 
 
 
@@ -4087,6 +4750,24 @@ for that table, or you may use ['name', 'street', 'city'].
 Look at B<!LinkName> for more information.
 
 
+=item B<!DoOnConnect>
+
+You can give an SQL Statement (or an array reference of SQL statements), that will be
+executed every time, just after an connect to the db. As third possibilty you can give an
+hash reference. After every successfull connect, DBIx::Recordset excutes the statements, in
+the element which corresponds to the name of the driver. '*' is executed for all drivers. 
+
+=item B<!Default>
+
+Specifies default values for new rows that are insert via hash or array access. The Insert
+method ignores this parameter.
+
+=item B<!TieRow>
+
+Setting this parameter to zero will cause DBIx::Recordset to B<not> tie the returned rows to
+an DBIx::Recordset::Row object and instead returns an simple hash. The benefit of this is,
+that it will speed up things, but you aren't able to write to such an row, nor can you use
+the link feature with such an row.
 
 
 
@@ -4248,6 +4929,7 @@ setup empty object
 
 =head1 METHODS
 
+=over 4
 
 =item B<*set = DBIx::Recordset -E<gt> Setup (\%params)>
 
@@ -4378,7 +5060,7 @@ B<params:> setup (only syntax 1+2), where (only if $where is omitted), fields
 
 =item B<$set -E<gt> Delete (\%params)>
 
-Deletes one or more records form the recordsets table(s)
+Deletes one or more records from the recordsets table(s)
 
 B<params:> setup (only syntax 1), where
 
@@ -4408,17 +5090,21 @@ Same as DBI. Executes a single SQL statement on the open database.
 
 =item B<$set -E<gt> First ()>
 
-Position the record pointer to the first row.
+Position the record pointer to the first row and returns it.
 
 
 =item B<$set -E<gt> Next ()>
 
-Position the record pointer to the next row.
+Position the record pointer to the next row and returns it.
 
 
-=item B<$set -E<gt> Prev ()>
+=item B<$set -E<gt> Prev ()> 
 
-Position the record pointer to the previous row.
+Position the record pointer to the previous row and returns it.
+
+=item B<$set -E<gt> Curr ()> 
+
+Returns the current row.
 
 =item B<$set -E<gt> AllNames ()>
 
@@ -4482,12 +5168,25 @@ change the current record.
 
 =item B<$set -E<gt> PrevNextForm ($prevtext, $nexttext, \%fdat)>
 
+=item B<$set -E<gt> PrevNextForm (\%param, \%fdat)>
+
 Returns a HTML form which contains a previous and a next button and
 all data from %fdat, as hidden fields. When calling the Search method,
 You must set the $max parameter to the number of rows
 you want to see at once. After the search and the retrieval of the
 rows, you can call PrevNextForm to generate the needed buttons for
 scrolling through the recordset.
+
+The second for allows you the specifies addtional parameter, which creates
+first, previous, next, last and goto buttons. Example:
+
+ $set -> PrevNextForm ({-first => 'First',  -prev => '<<Back', 
+                        -next  => 'Next>>', -last => 'Last',
+                        -goto  => 'Goto #'}, \%fdat)
+
+The goto button let's you jump to an random record number. If you obmit any
+of the parameters, the corresponding button will not be shown.
+
 
 
 =item B<$set -E<gt> Flush>
@@ -4497,6 +5196,11 @@ that the db is up-to-date. Normally, DBIx::Recordset holds the update in memory
 until the row is destroyed, by either a new Select/Search or by the Recordsetobject
 itself is destroyed. With this method you can make sure that every update is
 really written to the db.
+
+=item $set -> Dirty ()
+
+Returns true if there is at least one dirty row, that contains unflushed data.
+
 
 
 =item B<DBIx::Recordset::Undef ($name)>
@@ -4537,34 +5241,91 @@ Returns the DBI database handle.
 
 Returns the DBI statement handle of the last select.
 
+=item $set -> TableName ()
+
+Returns the name of the table of that recordset object
+
+=item $set -> TableNameWithOutFilter ()
+
+Returns the name of the table of that recordset object, but removes
+the string given with !TableFilter, if it is the prefix of the table name.
+
+=item $set -> PrimKey ()
+
+Returns the primary key that is given in the !PrimKey parameter.
+
+=item $set -> TableFilter ()
+
+Returns the table filter that is given in the !TableFilter parameter.
+
+
 
 =item B<$set -E<gt> StartRecordNo ()>
 
 Returns the record number of the record which will be returned for index 0.
 
 
-B<$set -E<gt> LastSQLStatement ()>
+=item B<$set -E<gt> LastSQLStatement ()>
 
 Returns the last executed SQL Statement.
 
 
-B<$set -E<gt> Disconnect ()>
+=item B<$set -E<gt> Disconnect ()>
 
 Closes the connection to the database.
 
 
-B<$set -E<gt> Link($linkname)>
+=item B<$set -E<gt> Link($linkname)>
 
 If $linkname is undef, returns reference to a hash of all links
 of the object. Otherwise, it returns a reference to the link with 
 the given name.
 
+=item B<$set -E<gt> Links()>
 
-B<$set -E<gt> Link4Field($fieldname)>
+Returns reference to a hash of all links
+of the object.
+
+
+=item B<$set -E<gt> Link4Field($fieldname)>
 
 Returns the name of the link for that field, or <undef> if
 there is no link for that field.
 
+
+=item $set -> TableAttr ($key, $value, $table)
+
+get and/or set an attribute of the table
+
+=over 4
+
+=item $key
+
+key to set/get
+
+=item $value
+
+if present, set key to this value
+
+=item $table
+
+Optional, let you specify another table, then the one use by the recordset object.
+
+=back
+
+=item $set -> Stats ()
+
+Returns an hash ref with some statistical values.
+
+=item $set -> LastError ()
+
+=item DBIx::Recordset -> LastError ()
+
+Returns the last error message, if any. If called in an array context the first
+element receive the last error message and the second the last error code.
+
+
+=back
 
 
 =head1 DATA ACCESS
@@ -4578,7 +5339,7 @@ an entry for every field.
 
 Example:
  $set[1]{id}	    access the field 'id' of the second record found
- $set[3]{name}	    access the field 'name' of the third record found
+ $set[3]{name}	    access the field 'name' of the fourth record found
 
 The record is fetched from the DBD driver when you access it the first time
 and is stored by DBIx::Recordset for later access. If you don't access the records
@@ -4807,8 +5568,22 @@ automatically recognized as a pointer to street.id.
   *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:drv:db',
 				     '!Table'	   => 'name') ;
 
-is enough. DBIx::Recordset will automatically add the !Links attribute. You may use the
+is enough. DBIx::Recordset will automatically add the !Links attribute. 
+Additionaly DBIx::Recordset adds a backlink, so for the table street, in our above example,
+there will be a link, named -name, which is a pointer from table street to all records in the
+table name where street.id is equal to name.street_id.
+
+You may use the
 !Links attribute to specify links which can not be automatically detected.
+
+NOTE: Because of the backlinks DBIx::Recordset cannot handle links to the table itself correctly,
+In this case it tries to add two links with the same name and only one can win. This behaviour will be 
+corrected in a future release. For now you need to add the correct link manualy via the !Links
+attribute.
+
+NOTE: To specify more then one link from one table to another table, you may prefix the field name
+with an specifier followed by two underscores. Example:  first__street_id, second__street_id.
+
 
 
 =head1 DBIx::Database
@@ -4861,10 +5636,24 @@ the database. This makes sure you don't get trouble when using the new method in
 startup file. You can keep the connection open to use them in further setup call to DBIx::Recordset
 objects.
 
+=item $tabfilter
+
+same as setup parameter !TableFilter
+
+=item $doonconnect
+
+same as setup parameter !DoOnConnect
 
 =back
 
+You also can specifies an hash ref which can contain the following parameters:
 
+!DataSource, !Username, !Password, !DBIAttr, !SaveAs, !KeepOpen, !TableFilter, !DoOnConnect
+
+
+=head2 $db = DBIx::Database -> DBHdl 
+
+returns the database handle (only if you specify !KeepOpen when calling C<new>)
 
 
 =head2 $db = DBIx::Database -> Get ($name)
@@ -4884,7 +5673,9 @@ get and/or set an attribute for an specfic table
 
 =item $table
 
-Name of table(s)
+Name of table(s). You may use '*' instead of the table
+name to specify an default value, which applies to all
+tables, for which are no other value is specified.
 
 =item $key
 
@@ -4898,7 +5689,8 @@ if present, set key to this value
 
 =head2 $db -> TableLink ($table, $linkname, $value)
 
-Get and/or set a link description for an table
+Get and/or set a link description for an table. If no $linkname
+is given returns all links for that table.
 
 =over 4
 
@@ -4917,10 +5709,74 @@ See !Links for more information.
 
 =back
 
+
+=head2 $db -> MetaData ($table, $metadata, $clear)
+
+Get and/or set the meta data for the given table.
+
+=over 4
+
+=item $table
+
+Name of table(s)
+
+=item $metadata
+
+if present, this must be a reference to a hash with the new metadata. You only
+should use this, if you really know what you do.
+
+=item $clear
+
+Clears the metadata for the given table, The next call to DBIx::Database -> new
+will recreate the metadata. Usefull if your table has changed (e.g. by ALTER TABLE)
+
+=back
+
 =head2 $db -> AllTables
 
 This returns a reference to a hash of the keys to all the tables of 
 the datasource.
+
+=head2 $db -> AllNames ($table)
+
+Returns a reference to an array of all fieldnames for the given table.
+
+=head2 $db -> AllTypes ($table)
+
+Returns a reference to an array of all fieldtypes for the given table.
+
+=item $db -> do ($statement, $attribs, \%params)
+
+Same as DBI. Executes a single SQL statement on the open database.
+
+=head1 Casesensitive/insensitiv
+
+In SQL all names (field/tablenames etc.) should be case insensitiv. Various
+DBMS handle the case of names different. For that reason I<DBIx::Recordset>
+translate all names to lower case, this makes sure your application will
+run with any DBMS, regardless if names returned in lower/uppercase by the
+DBMS. Some DBMS are casesensitiv (I know at least Sybase, depending on your collate
+settings). To use such a casesensitiv DBMS, the best is to create your database
+with all names written in lowercase. In situation, where this isn't possible, you 
+can set C<$PreserveCase> to 1. In this case DBIx::Recordset will not perform any
+case translation. B<NOTE:> C<$PreserveCase> is still experimental any may change in
+further releases.
+
+=head1 FETCHSIZE / $FetchsizeWarn
+
+Some operations in Perl (i.e. C<foreach>, assigning arrays) needs to know the size
+of the whole array. When Perl needs to know the size of an array it call the method
+C<FETCHSIZE>. Since not all DBD drivers/DBMS returns the number of selected rows
+after an SQL C<SELECT>, the only way to really determinate the number of selected
+rows, would be to fetch them all from the DBMS. Since this could cause a lot of work, it
+may be very inefficent. Therfor I<DBIx::Recordset> per default die's when Perl calls
+FETCHSIZE. If you know your DBD drivers returns the correct value in C<$sth> -> C<rows>
+after the execution of an C<SELECT>, you can set C<$FetchsizeWarn> to zero to let
+C<FETCHSIZE> return the value from C<$sth> -> C<rows>. Setting it to 1, will cause
+I<DBIx::Recordset> to only issue a warning, but perform the operation.
+
+B<NOTE:> Since I don't have enought experiences how this behave with different DBMS, this
+feature is still experimental.
 
 
 
@@ -4996,7 +5852,7 @@ which can not be changed.
 
 Somewhere in your script startup (or at server startup time) add a setup call:
 
- *set = DBIx::Recordset-> setup ({'!DataSource'  =>  "dbi:$Driver:$DB",
+ *set = DBIx::Recordset-> Setup ({'!DataSource'  =>  "dbi:$Driver:$DB",
 			                        '!Table'	  =>  "$Table",
 			                        '!Fields'	  =>  "a, b, c"}) ;
 
@@ -5030,10 +5886,12 @@ Currently, there are definitions for:
 
 =item B<DBD::Oracle (requires DBD::Orcale 0.60 or higher)>
 
-=item B<DBD::Sysbase (not fully tested)>
+=item B<DBD::Sysbase>
+
+=item B<DBD::Informix>
 
 DBIx::Recordset has been tested with all those DBD drivers (on Linux 2.0.32, except 
-DBD::ODBC, which has been tested on Windows '95 using Access 7).
+DBD::ODBC, which has been tested on Windows '95 using Access 7 and with MS SQL Server).
 
 
 If you want to use another DBD driver with DBIx::Recordset, it may
@@ -5051,7 +5909,7 @@ from the test.pl. The examples show the DBIx::Recordset call first, followed by 
 generated SQL command.
 
 
- *set = DBIx::Recordset-> setup ({'!DataSource'  =>  "dbi:$Driver:$DB",
+ *set = DBIx::Recordset-> Setup ({'!DataSource'  =>  "dbi:$Driver:$DB",
                     			    '!Table'	  =>  "$Table"}) ;
 
 Setup a DBIx::Recordset for driver $Driver, database $DB to access table $Table.
@@ -5059,14 +5917,14 @@ Setup a DBIx::Recordset for driver $Driver, database $DB to access table $Table.
 
  $set -> Select () ;
 
- SELECT * form <table> ;
+ SELECT * from <table> ;
 
 
  $set -> Select ({'id'=>2}) ;
  is the same as
  $set1 -> Select ('id=2') ;
 
- SELECT * form <table> WHERE id = 2 ;
+ SELECT * from <table> WHERE id = 2 ;
 
 
  $set -> Select ({name => "Second Name\tFirst Name"}) ;
@@ -5099,14 +5957,14 @@ Setup a DBIx::Recordset for driver $Driver, database $DB to access table $Table.
  $set1 -> Search ({'$start'=>0,'$max'=>2, '$order'=>'id'})  or die "not ok 
 ($DBI::errstr)" ;
 
- SELECT * form <table> ORDER BY id ;
+ SELECT * from <table> ORDER BY id ;
  B<Note:> Because of the B<start> and B<max> only records 0,1 will be returned
 
 
  $set1 -> Search ({'$start'=>0,'$max'=>2, '$next'=>1, '$order'=>'id'})  or die "not ok 
 ($DBI::errstr)" ;
 
- SELECT * form <table> ORDER BY id ;
+ SELECT * from <table> ORDER BY id ;
  B<Note:> Because of the B<start>, B<max> and B<next> only records 2,3 will be 
 returned
 
@@ -5114,7 +5972,7 @@ returned
  $set1 -> Search ({'$start'=>2,'$max'=>1, '$prev'=>1, '$order'=>'id'})  or die "not ok 
 ($DBI::errstr)" ;
 
- SELECT * form <table> ORDER BY id ;
+ SELECT * from <table> ORDER BY id ;
  B<Note:> Because of the B<start>, B<max> and B<prev> only records 0,1,2 will be 
 returned
 
@@ -5122,7 +5980,7 @@ returned
  $set1 -> Search ({'$start'=>5,'$max'=>5, '$next'=>1, '$order'=>'id'})  or die "not ok 
 ($DBI::errstr)" ;
 
- SELECT * form <table> ORDER BY id ;
+ SELECT * from <table> ORDER BY id ;
  B<Note:> Because of the B<start>, B<max> and B<next> only records 5-9 will be 
 returned
 

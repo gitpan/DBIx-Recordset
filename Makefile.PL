@@ -190,5 +190,7 @@ WriteMakefile
     'NAME'	=> 'DBIx::Recordset',
     'VERSION_FROM' => 'Recordset.pm', # finds $VERSION
     'dist'         => { COMPRESS => 'gzip', SUFFIX => 'gz'},
+    'clean'        => { FILES => 'test.log' },
+    'realclean'    => { FILES => './test test.log' },
 
     );

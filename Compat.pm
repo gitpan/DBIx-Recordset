@@ -13,6 +13,8 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
+#   $Id: Compat.pm,v 1.14 1999/12/22 21:22:13 richter Exp $
+#
 ###################################################################################
 
 package DBIx::Compat ;
@@ -80,15 +82,25 @@ sub ListTables
     return $hdl -> tables ;
     }
 
+sub ListTablesODBC
+
+    {
+    my $hdl   = shift ; 
+
+    return grep (!/^MSys/, $hdl -> tables)  ;
+    }
+
 sub ListTablesFunc
 
     {
     my $hdl   = shift ; 
 
-    my @tabs = $hdl -> tables ;
+    my @tabs ;
+
+    eval { @tabs = $hdl -> tables } ;
     
     # try the _ListTables function for DBD::mysql before 1.21..
-    @tabs = $hdl -> func('_ListTables' ) if ($#tabs < 0) ;
+    @tabs = $hdl -> func('_ListTables' ) if ($#tabs < 0 || $@) ;
 
     return @tabs ;
     }
@@ -108,6 +120,38 @@ sub ListTablesPg
     return @tabs ;
     }
 
+
+sub ListTablesIfmx
+
+    {
+    my $hdl   = shift ; 
+
+    my @tabs = $hdl -> func('_tables' );
+
+    return @tabs ;
+    }
+
+
+sub LimitOffsetStrPg
+
+    {
+    my ($start,$max) = @_;
+     
+    return ($max > 0?"LIMIT $max":'') . ($start > 0?" OFFSET $start":'') ;
+    }	
+
+
+sub LimitOffsetStrMySQL
+
+    {
+    my ($start,$max) = @_;
+
+    $start ||= 0 ;
+     
+    return ($max > 0)?"LIMIT $start,$max":''  ;
+    }	
+
+
 ####################################################################################
 
 
@@ -118,7 +162,9 @@ sub ListTablesPg
             'Placeholders'   => 10,              # Default: Placeholder are supported
             'ListFields'     => \&SelectFields,  # Default: Use Select to get field names
             'ListTables'     => \&ListTables,    # Default: Use DBI $dbh -> tables
-            'QuoteTypes'     => { },             # Default: Don't know what to quote
+            # QuoteTypes isn't used anymore !!
+            'QuoteTypes'   => {   1=>1,   12=>1,  -1=>1, 9 => 1, 10 => 1, 11 => 1}, # Default: ODBC Types, quote char, varchar and longvarchar
+            'NumericTypes'   => { 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 1, 7 => 1, 8 => 1, -5 => 1, -6 => 1}, # Default numeric ODBC Types
             'SupportJoin'    => 1,               # Default: Driver supports joins (select with multiple tables)
             'SupportSQLJoin' => 1,               # Default: Driver supports INNER/LEFT/RIGHT JOIN Syntax in SQL select
             'SQLJoinOnly2Tabs' => 1,             # Default: Driver supports LEFT/RIGHT JOIN only with two tables
@@ -126,6 +172,7 @@ sub ListTablesPg
             'NullOperator'   => 'IS',            # Default: Operator to compare with NULL is IS
 	    'NeedNullInCreate' => '',            # Default: NULL allowed without explicit declare in CREATE
 	    'EmptyIsNull'    => 0,		 # Default: Empty strings ('') and NULL are different
+	    'LimitOffset'    => undef,		 # Default: Don't use LIMIT/OFFSET in SELECTs
              },
 
     'ConfFile' =>
@@ -163,10 +210,34 @@ sub ListTablesPg
 						#   type must be the same as the db type
 
             'SupportSQLJoin' => 0,              # Driver does not supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
+            'NumericTypes'   => { 
+                                20 => 1, 
+                                21 => 1, 
+                                22 => 1, 
+                                23 => 1, 
+                                700 => 1, 
+                                701 => 1, 
+                                1005 => 1, 
+                                1006 => 1, 
+                                1007 => 1, 
+                                }, 
+
+     
             'QuoteTypes' =>
-                {   17=>1,   18=>1,   19=>1,   20=>1,   25=>1,  409=>1,  410=>1,
-                   411=>1,  605=>1, 1002=>1, 1003=>1, 1004=>1, 1009=>1, 1026=>1,
-                  1039=>1, 1040=>1, 1041=>1, 1042=>1, 1043=>1 },
+                {   16 => 1, 17=>1,   18=>1,   19=>1,   20=>1,   25=>1,  409=>1,  410=>1,
+                    411=>1,  605=>1, 
+                    702  =>1,   # abstime
+                    703  =>1,   # reltime
+                    1002=>1, 1003=>1, 1004=>1, 1009=>1, 1026=>1,
+                    1039=>1, 1040=>1, 1041=>1, 1042=>1, 1043=>1,
+                    1082 =>1,   # date
+                    1083 =>1,   # time
+                    1184 =>1,   # datetime
+                    1186 =>1,   # interval
+                    1296 =>1
+                 },
+	    'LimitOffset'    => \&LimitOffsetStrPg, # Only PostgreSQL 6.5+
+
 #### Use the following line for older DBD::Pg versions (< 0.89) which does
 #    not support the table_info function
 #            'ListTables'     => \&ListTablesPg,    # DBD::Pg
@@ -191,23 +262,30 @@ sub ListTablesPg
 						    #   type must be the same as the db type
             'SQLJoinOnly2Tabs' => 0,		    # mysql supports LEFT/RIGHT JOIN with more than two tables
             'ListTables'     => \&ListTablesFunc,   # DBD::mysql $dbh -> func
+	    'LimitOffset'    => \&LimitOffsetStrMySQL, 
             },
 
     'Solid' => {
             'Placeholders' => 3,		    # Placeholders supported, but cannot use a
 						    #   string where a number expected
-            'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1 }
+            'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1, 9=> 1 }
             },
 
     'ODBC' => {
-            'Placeholders' => 1,		    # Placeholders supported, but seems not
+            'Placeholders' => 10,		    # Placeholders supported, but seems not
 						    #   to works all the time ?
-            'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1}
-            },
+            'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1},
+ 	    'NeedNullInCreate' => 'NULL',          
+            'ListTables'     => \&ListTablesODBC,    # Use DBI $dbh -> tables, exclude /^MSys/
+           },
     'Oracle' => {
             'Placeholders' => 3,		    # Placeholders supported, but cannot use a
 						    #   string where a number expected
-            'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1 },
+            'QuoteTypes'   => {   
+                            -4=>1,
+                            -3=>1,
+                            -1=>1,
+                            1=>1, 9=>1,  11=>1,   12=>1, },
             'SupportSQLJoin' => 3,		    # Oracle need  a = b (+) instead of  INNER/LEFT/RIGHt JOIN Syntax in SQL select
 	    'EmptyIsNull'    => 1,		    # Oracle converts empty strings ('') to NULL
 # older DBD::Orcales only need the following one entry, but some test may fail
@@ -224,11 +302,19 @@ sub ListTablesPg
 
 				},
             'SupportSQLJoin' => 2,               # Driver need *= instead of  INNER/LEFT/RIGHt JOIN Syntax in SQL select
-#            'SupportSQLJoin' => 0, 
             'HaveTypes'      => 1,       
             'NullOperator'   => 'IS',
 	    'NeedNullInCreate' => 'NULL'          
-	},
+	    },
+
+    'Informix' => {
+            'Placeholders' => 2,
+            'SupportSQLJoin' => 4,
+            'SQLJoinOnly2Tabs' => 0,
+            'ListTables'     => \&ListTablesIfmx
+            },
+
+
     ) ;    
 
 
@@ -254,17 +340,79 @@ DBIx::Compat - Perl extension for Compatibility Infos about DBD Drivers
 
   use DBIx::Compat;
 
-  $DBIx::Compat::Compat{$Driver}{Placeholders}  
-  $DBIx::Compat::Compat{$Driver}{QuoteTypes}  
-  $DBIx::Compat::Compat{$Driver}{ListFields}  
-
+  my $HaveTypes  = DBIx::Compat::GetItem ($drv, 'HaveTypes') ;
 
 =head1 DESCRIPTION
 
 DBIx::Compat contains a hash which gives information about DBD drivers, to allow
 to write driver independent programs.
 
-Currently there are three attributes defined:
+Currently there are the following attributes defined:
+
+
+=head2 B<ListFields>
+
+A function which will return information about all fields of an table.
+Needs an database handle and a tablename as argument.
+Must at least return the fieldnames and the fieldtypes.
+
+ Example:
+  
+  $ListFields = $DBIx::Compat::Compat{$Driver}{ListFields} ;
+  $sth = &{$ListFields}($DBHandle, $Table) or die "Cannot list fields" ;
+    
+  @{ $sth -> {NAME} } ; # array of fieldnames
+  @{ $sth -> {TYPE} } ; # array of filedtypes
+
+  $sth -> finish ;
+
+
+
+=head2 B<ListTables>
+
+A function which will return an array of all tables of the datasource. Defaults to
+C<$dbh> -> C<tables>.
+
+=head2 B<NumericTypes>
+
+Hash which contains one entry for all datatypes that are numeric.
+
+=head2 B<SupportJoin>
+
+Set to true if the DBMS supports joins (select with multiple tables)
+
+=head2 B<SupportSQLJoin>
+
+Set to 1 if the DBMS supports INNER/LEFT/RIGHT JOIN Syntax in SQL select.
+Set to 2 if DBMS needs a *= b syntax for inner join (MS-SQL, Sybase).
+Set to 3 if DBMS needs a = b (+) syntax for inner join (Oracle syntax).
+
+
+=head2 B<SQLJoinOnly2Tabs>
+
+Set to true if DBMS can only support two tables in inner joins.
+
+=head2 B<HaveTypes>
+
+Set to true if DBMS supports datatypes (most DBMS will do)
+
+=head2 B<NeedNullInCreate>
+
+Set to C<'NULL'> if DBMS requires the NULL keyword when creating tables
+where fields should contains nulls.
+
+=head2 B<EmptyIsNull>
+
+Set to true if an empty string ('') and NULL is the same for the DBMS.
+
+=head2 B<LimitOffset>
+
+An function which will be used to create a SQL text for limiting the
+number of fetched rows and selecting the starting row in selects.
+
+
+=head1 B<Keys that aren't needed anymore>
+
 
 =head2 B<Placeholders>
 
@@ -296,21 +444,6 @@ need to be quoted.
 will be true when the type in $Type for the driver $Driver must be
 quoted.
 
-=head2 B<ListFields>
-
-A function which will return information about all fields of an table.
-Needs an database handle and a tablename as argument.
-Must at least return the fieldnames and the fieldtypes.
-
- Example:
-  
-  $ListFields = $DBIx::Compat::Compat{$Driver}{ListFields} ;
-  $sth = &{$ListFields}($DBHandle, $Table) or die "Cannot list fields" ;
-    
-  @{ $sth -> {NAME} } ; # array of fieldnames
-  @{ $sth -> {TYPE} } ; # array of filedtypes
-
-  $sth -> finish ;
 
 =head1 Supported Drivers
 
@@ -329,6 +462,10 @@ Currently there are entry for
 =item B<DBD::CSV>
 
 =item B<DBD::Oracle>
+
+=item B<DBD::Sysbase>
+
+=item B<DBD::Informix>
 
 if you detect an error in the definition or add an definition for a new
 DBD driver, please mail it to the author.

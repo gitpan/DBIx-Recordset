@@ -1,5 +1,100 @@
 Revision history for Perl extension DBIx::Recordset
 
+0.20  6. Jan 2000
+
+  - Fixed a problem with perl 5.004_04. Spotted by Paul J. Schinder.
+  - Added entry for DBD::Informix in Compat.pm send by Kelly Peet
+  - Added outer join syntax for DBD::Informix
+  - undef in !Filter passed to Recordset constructor overrides
+    filter-function for TableAttr.
+  - Fixed a problem with PrevNextForm and MoreRecord spotted by
+    Richard Chen and David M. Davission.
+  - Fixed some problems with eg/search.pl with help from
+    Richard Chen.
+  - Added date and time datatype to PostgreSQL quoting with help
+    from James Bishop.
+  - Added LastError function which returns the last error message
+    and code. This solves problems where the DBI object is already
+    out of scope and the $DBI::errstr isn't available anymore.
+  - Now all setup parameters (the ones starting with !), can also
+    be preset via DBIx::Database -> TableAttr.
+  - Fix a problem, that an error that sets $@ inside of DESTROY
+    will clear out an earlier error message. Based on a patch from
+    Dean Brettle.
+  - !Filter can take a thrid argument, which will cause
+    DBIx::Recordset to always execute the Input Filter
+  - Fixed a problem inside Flush, which will report sometime
+    'Not a scalar reference..'
+  - DBIx::Recordset handle uppercase field and tablesnames correctly
+    now. This is important to work with Oracle.
+  - New Parameter !TableFilter allows you to specify only a subset
+    of tables from the database/tablespace to work with 
+  - !TableFilter is taken in account as prefix when searching
+    for links
+  - Added NeedNullInCreate for ODBC to work with MS SQL Server
+  - Recordset Object didn't get the DBHandle from Database object if
+    specified as !DataSource. Now it does. (Database object must
+    be created with !KeepOpen)
+  - !Filter can take rqINSERT or rqUPDATE as Argument after subref, 
+    which causes the Filter to always execute on INSERT and/or UPDATE,
+    regardless, if there is a value for the field or not.
+  - Added methods TableName, TableNameWithoutFilter, TableFilter and
+    PrimKey.
+  - Support multiple Database object with different !TableFilter.
+  - !LongNames is now also supported for SELECTs which select not all,
+    but a specified number of fields (i.e. fields are ne '*').
+  - DBIx::Database TableLink method, returns all Links for a given 
+    table when no linkname is given.
+  - Added more tests to ensure that new feature do not break old ones.
+  - removed call to non existing method $dbh->begin and call 
+    $dbh->commit and $dbh->rollback only when AutoCommit is off, so
+    the DBIx::Recordset transaction methods, can be called regardless, if
+    the DB supports transactions or not. Patch from Alexander Smishlajev.
+  - make clean removes test.log and make realclean remove privious
+    configuration. Patch from Alexander Smishlajev.
+  - !DataSource can be a DBI database handle. Patch from Alexander Smishlajev.
+  - New method Dirty check if there is at leat one dirty row in a recordset.
+    Patch from Alexander Smishlajev.
+  - DROP test tables at end of test. Patch from Alexander Smishlajev.
+  - DBIx::Database now makes an connect to the database if KeepOpen is set
+    and the object is taken from an already stored one.
+  - Flush will call finish on open statement handles to avoid statement
+    handles that stay open to long.
+  - Add new parameter !DoOnConnect, which lets you specify any SQL statement
+    that should be execute after each connect.
+  - PrevNextForm could now take a hash ref as parameter and
+    addtionaly generate first, last and goto buttons
+  - Documentation updates.
+  - Added patch from Klaus Reger to avoid warning about undefined value
+    in DESTROY.
+  - Added more datatypes to quote for Pg and Oracle. Patch from Klaus Reger.
+  - Undef values in where expression are transfored to "is null" operators,
+    also when using placeholders.
+  - DBIx::Recordset now uses always bind_param, to avoid problems with quoting
+    and to speed up things. This means DBD drivers which does not support
+    placesholdes will not work anymore with DBIx::Recordset, but all 
+    DBD drivers I know, supports now placesholder, so there should be no problem.
+    This also remove an potetial insecure eval form the BuildWhere function.
+  - DBIx::Recordset::Flush will update all dirty rows, also if some of them
+    can't be written to the 
+    database. Patch from Alexander Smishlajev.
+  - DBIx::Recordset::Row::Flush make sure that exactly one row is updated. Based
+    on a patch from Alexander Smishlajev.
+  - By setting $FetchsizeWarn to zero, you can now make DBIx::Recordset return
+    the value of $sth -> rows, when the FETCHSIZE method is called by Perl.
+    This feature is still experimental, because I don't what different DBMS
+    returns in $sth -> rows, after an SELECT. Patch from Robert.
+  - By setting $PreserveCase, you can cause DBIx::Recordset to _not_ translate all
+    names to lowercase. Per default DBIx::Recordset translates all names (tablenames/
+    fieldnames) to lowercase to let application work with different DBMS.
+  - Updated docs of DBIx::Compat.
+  - If the DBMS supports it, DBIx::Recordset will use the LIMIT/OFFSET keywords if you
+    only want to fetch a limited number of row from the database (for parameters 
+    $start and $max). Patch from Robert.
+  - Added an indroduction to DBIx::Recordset (based on my talk on the 1999 Perl conference)
+    which is viewable with perldoc Intrors.pod
+
+
 0.19  30 Mar 1999
 
   - changed order of group by and order by in select. Spotted by
@@ -60,7 +155,6 @@ Revision history for Perl extension DBIx::Recordset
     table.field.
   - Added methods for begin/commit/rollback to make sure DBIx::Recordset
     internal data are correctly updated. Suggested by John Tobey.
-
 
 0.18  3 Nov 1998 
   - Added !TabJoin parameter to support LEFT/RIGTH/INNER JOIN

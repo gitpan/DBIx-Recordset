@@ -1,7 +1,7 @@
 
 DBIx::Recordset - Perl extension for DBI recordsets
 
-Copyright (c) 1997-1999 Gerald Richter / ECOS
+Copyright (c) 1997-2000 Gerald Richter / ECOS
 
 You may distribute under the terms of either the GNU General Public 
 License or the Artistic License, as specified in the Perl README file.
@@ -66,6 +66,11 @@ every database for which a DBD driver is available (see also DBIx::Compat)
 
 
 For more information look at perldoc DBIx::Recordset.
+An introduction to DBIx::Recordset can be view with perldoc Intrors.pod.
+The introduction can also be viewed online at 
+
+  http://perl.apache.org/embperl/Intrors.pod.cont.html
+
 
 
 INSTALLATION
@@ -99,8 +104,9 @@ Currently there are entries for
 - DBD::Solid
 - DBD::ODBC
 - DBD::Oracle (requires DBD::Orcale 0.60 or higher)
-- DBD::Sybase (not fully tested)
+- DBD::Sybase 
 - DBD::CSV
+- DBD::Informix 
 
 If you create your own entry please send it to me, so I can include it
 in the next release.

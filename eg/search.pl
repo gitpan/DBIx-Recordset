@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!perl
 
 use CGI ;
 use DBIx::Recordset ;
@@ -17,6 +17,7 @@ print '<h1>DBIx::Recordset Example </h1>' ;
 
 %fdat = map { $_ => $q -> param($_) } $q -> param ;
 
+$fdat{'!IgnoreEmpty'} = 2 ; # Just to make the condition dialog work
 
 if (!defined ($fdat{'!DataSource'}) || !defined ($fdat{'!Table'})|| defined($fdat{'showdsn'}))
     {
@@ -116,24 +117,20 @@ elsif (defined ($fdat{'cond'}))
     print "<tr>\n" ;
     print "  <td>Datasource:</td>\n" ;
     print "  <td>\n" ;
-    print $q -> textfield (-name=>"!DataSource", -size=>20) ;           
+    print $fdat{"!DataSource"} ;           
     print "  </td>\n" ;
     print "</tr>\n" ;
     print "<tr>\n" ;
     print "  <td>Table:</td>\n" ;
-    print "  <td>" , $q -> textfield (-name=>"!Table", -size=>"20"), "</td>\n" ;
+    print "  <td>$fdat{'!Table'}</td>\n" ;
     print "</tr>\n" ;
     print "<tr>\n" ;
     print "  <td>User:</td>\n" ;
-    print "  <td>" , $q -> textfield (-name=>"!Username", -size=>"20"), "</td>\n" ;
-    print "</tr>\n" ;
-    print "<tr>\n" ;
-    print "  <td>Password:</td>\n" ;
-    print "  <td>" , $q -> password_field (-name=>"!Password", -size=>"20"), "</td>\n" ;
+    print "  <td>$fdat{'!Username'}</td>\n" ;
     print "</tr>\n" ;
     print "<tr>\n" ;
     print "  <td>Rows Per Page:</td>\n" ;
-    print "  <td>" , $q -> textfield (-name=>'$max', -size=>5), "</td>\n" ;
+    print "  <td>$fdat{'$max'}</td>\n" ;
     print "</tr>\n" ;
 
     if ($DBI::errstr)
@@ -190,29 +187,24 @@ else
     ### get fieldnames of query ###
     $names = $set -> Names if ($set) ;
 
-
     print "<table>\n" ;
     print "<tr>\n" ;
     print "  <td>Datasource:</td>\n" ;
     print "  <td>\n" ;
-    print $q -> textfield (-name=>"!DataSource", -size=>20) ;           
+    print $fdat{"!DataSource"} ;           
     print "  </td>\n" ;
     print "</tr>\n" ;
     print "<tr>\n" ;
     print "  <td>Table:</td>\n" ;
-    print "  <td>" , $q -> textfield (-name=>"!Table", -size=>"20"), "</td>\n" ;
+    print "  <td>$fdat{'!Table'}</td>\n" ;
     print "</tr>\n" ;
     print "<tr>\n" ;
     print "  <td>User:</td>\n" ;
-    print "  <td>" , $q -> textfield (-name=>"!Username", -size=>"20"), "</td>\n" ;
-    print "</tr>\n" ;
-    print "<tr>\n" ;
-    print "  <td>Password:</td>\n" ;
-    print "  <td>" , $q -> password_field (-name=>"!Password", -size=>"20"), "</td>\n" ;
+    print "  <td>$fdat{'!Username'}</td>\n" ;
     print "</tr>\n" ;
     print "<tr>\n" ;
     print "  <td>Rows Per Page:</td>\n" ;
-    print "  <td>" , $q -> textfield (-name=>'$max', -size=>5), "</td>\n" ;
+    print "  <td>$fdat{'$max'}</td>\n" ;
     print "</tr>\n" ;
 
     if ($DBI::errstr)
@@ -252,7 +244,7 @@ else
             print "  <tr>\n" ;
             foreach $n (@$names)
                 {
-                print "    <td>$$r{$n}</td>\n" ;
+                print "    <td>$$r{lc($n)}</td>\n" ;
                 }
             print "  </tr>\n" ;
             }

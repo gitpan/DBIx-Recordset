@@ -144,7 +144,7 @@ SetupObject (\%fdat) ; $names = $set -&gt; AllNames () if ($set) ; -]</p>
     <th>[+ $$names[$col] +]</th>
   </tr>
   <tr>
-    <td>[+ $set[$row]{$$names[$col]} +]</td>
+    <td>[+ $set[$row]{lc($$names[$col])} +]</td>
   </tr>
 </table>
 </div>

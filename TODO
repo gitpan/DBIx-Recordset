@@ -7,11 +7,11 @@ Features
 
 - Support cursors, to fetch only those data which is absolutly necessary
 
-- Support for FETCHSIZE [Malcom Cook]
-
-- quote date types
-
 - ::Hash -> New record, then retrieve autoincrement value -> force reselect?
+
+- unique names for multiple links to same table
+
+- UPDATE/INSERT/DELETE for mulitple tables [Robert 1.1.2000]
 
 Bugs
 ----
@@ -20,12 +20,11 @@ Bugs
 
 - INSERT $rc = undef -> $rc = 1 -> mult linked nested objects (ka aktuell)
 
+- invalidate active statements with links
+
 Tests
 -----
 
 Doku 
 ----
-
-  - Delete
-  - Clear
 

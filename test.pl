@@ -6,14 +6,15 @@
 use strict ;
 use vars qw{ *set1 *set2 *set3 *set4 *set5 *set6 *set7 *set8 *set9 *set10
              *set11 *set12 *set13 *set14 *set15 *set16 *set17 *set18 *set19 *set20
-             *set1_ *set20c *set13h %set15h
+             *set1_ *set20c *set13h *set13h2 %set15h
              @TestData @TestFields %TestCheck %hTestFields1 %hTestIds1 @TestSetup @TestIds
              @Table $Driver $DSN $User $Password
              @drivers %Drivers 
              $dbh $drv %errcnt $err $rc $contcnt $lasttest
              $errors $fatal $loaded
              $Join $SQLJoin $CreateNULL $EmptyIsNull
-             *rs $rs @rs %rs} ;
+             *rs $rs @rs %rs
+             $nocleanup} ;
 
 
 BEGIN { $| = 1;  $fatal = 1 ; print "\nLoading...                "; }
@@ -57,10 +58,7 @@ sub printlogf
         $contcnt = 2 ;
         }
 
-    formline ('@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<... ', $txt) ;
-    printlog $^A ;	
-    $^A = '' ;
-    
+    printlog ($txt  . '... ' . (' ' x (35 - length ($txt)))) ;
     }
 
 
@@ -353,6 +351,20 @@ sub AddTestData
 
 #################################################
 
+sub DropTestTables
+
+    {
+      my ($dbh, @tlist) =@_;
+      return unless ($dbh and @tlist);
+      foreach my $st (map "DROP TABLE $_", @tlist) {
+        my $rc =$dbh->do( $st);
+      };
+      print LOG '-- Dropped ', join(', ', @tlist), "\n" ;
+    }
+
+ 
+#################################################
+
 sub DoTest
 
     {
@@ -362,13 +374,12 @@ sub DoTest
     $User        = $_[2] ;
     $Password    = $_[3] ;
 
-
     $Join    =  DBIx::Compat::GetItem ($Driver, 'SupportJoin') ;
     $SQLJoin =  DBIx::Compat::GetItem ($Driver, 'SupportSQLJoin') ;
     $CreateNULL = DBIx::Compat::GetItem ($Driver, 'NeedNullInCreate') ;
     $EmptyIsNull= DBIx::Compat::GetItem ($Driver, 'EmptyIsNull') ;
 
-    @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4') ;
+    @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4', 'dbix_rs5', 'dbix_rs6') ;
 
     $errors = 0 ;
 
@@ -403,15 +414,12 @@ use strict ;
     print LOG "\n--------------------\n" ;
     @TestSetup =
         (
-        " DROP TABLE $Table[0]",
-        " DROP TABLE $Table[1]",
-        " DROP TABLE $Table[2]",
-        " DROP TABLE $Table[3]",
-    
         "CREATE TABLE $Table[0] ( id INT $CreateNULL, name CHAR (20) $CreateNULL, value1 INT $CreateNULL, addon CHAR (20) $CreateNULL)",
-        "CREATE TABLE $Table[1] ( id INTEGER $CreateNULL, name2 CHAR(20) $CreateNULL, value2 INTEGER $CreateNULL, $Table[3]_id INTEGER $CreateNULL)",
+        "CREATE TABLE $Table[1] ( id INTEGER $CreateNULL, name2 VARCHAR(20) $CreateNULL, value2 INTEGER $CreateNULL, $Table[3]_id INTEGER $CreateNULL)",
         "CREATE TABLE $Table[2] ( value1 INTEGER $CreateNULL, txt CHAR(20) $CreateNULL )",
         "CREATE TABLE $Table[3] ( id INTEGER $CreateNULL, typ CHAR(20) $CreateNULL)",
+        "CREATE TABLE $Table[4] ( id INTEGER $CreateNULL, txt5 CHAR(20) $CreateNULL, up__rs5_id INTEGER $CreateNULL,  a__rs6_id INTEGER $CreateNULL,  b__rs6_id INTEGER $CreateNULL)",
+        "CREATE TABLE $Table[5] ( id INTEGER $CreateNULL, txt6 CHAR(20) $CreateNULL)",
         ) ;
 
     @TestData =
@@ -464,13 +472,35 @@ use strict ;
                 { 'id' => 3 , 'typ' => "'Third item Type 1'" },
     #            { 'id' => 4 , 'typ' => "'Fours item Type 1'" },
             ],
+            [
+                { 'id' => 1 ,  'txt5' => "'1 in Tab5'",  "up__rs5_id" => 'NULL', "a__rs6_id" => 1,  "b__rs6_id" => 1   },
+                { 'id' => 2 ,  'txt5' => "'2 in Tab5'",  "up__rs5_id" => 1,      "a__rs6_id" => 2,  "b__rs6_id" => 1   },
+                { 'id' => 3 ,  'txt5' => "'3 in Tab5'",  "up__rs5_id" => 1,      "a__rs6_id" => 3,  "b__rs6_id" => 1   },
+                { 'id' => 4 ,  'txt5' => "'4 in Tab5'",  "up__rs5_id" => 1,      "a__rs6_id" => 4,  "b__rs6_id" => 1   },
+                { 'id' => 5 ,  'txt5' => "'5 in Tab5'",  "up__rs5_id" => 2,      "a__rs6_id" => 5,  "b__rs6_id" => 1   },
+                { 'id' => 6 ,  'txt5' => "'6 in Tab5'",  "up__rs5_id" => 2,      "a__rs6_id" => 6,  "b__rs6_id" => 1   },
+                { 'id' => 7 ,  'txt5' => "'7 in Tab5'",  "up__rs5_id" => 3,      "a__rs6_id" => 7,  "b__rs6_id" => 1   },
+                { 'id' => 8 ,  'txt5' => "'8 in Tab5'",  "up__rs5_id" => 4,      "a__rs6_id" => 8,  "b__rs6_id" => 1   },
+                { 'id' => 9 ,  'txt5' => "'9 in Tab5'",  "up__rs5_id" => 4,      "a__rs6_id" => 9,  "b__rs6_id" => 1   },
+            ],
+            [
+                { 'id' => 1 ,  'txt6' => "'1 in Tab6'",   },
+                { 'id' => 2 ,  'txt6' => "'2 in Tab6'",   },
+                { 'id' => 3 ,  'txt6' => "'3 in Tab6'",   },
+                { 'id' => 4 ,  'txt6' => "'4 in Tab6'",   },
+                { 'id' => 5 ,  'txt6' => "'5 in Tab6'",   },
+                { 'id' => 6 ,  'txt6' => "'6 in Tab6'",   },
+                { 'id' => 7 ,  'txt6' => "'7 in Tab6'",   },
+                { 'id' => 8 ,  'txt6' => "'8 in Tab6'",   },
+                { 'id' => 9 ,  'txt6' => "'9 in Tab6'",   },
+            ],
         ) ;
 
     my $i ;
 
-    for ($i = 0; $i <= $#Table - 1; $i++)
+    for ($i = 0; $i <= $#Table; $i++)
         {
-        AddTestData ($i) ;
+        AddTestData ($i) if ($i != 3) ;
         }
 
     AddTestData (3, 'typ') ;
@@ -489,6 +519,9 @@ use strict ;
 
     my $st ;
     my $rc ;
+    print LOG "--- \"Table does not exist\" warnings may appear here. Please ignore.\n" ;
+    DropTestTables($dbh, @Table);
+ 
 
     foreach $st (@TestSetup)
         {
@@ -909,7 +942,7 @@ use strict ;
 	}
     else
 	{
-	printlog "skipping test on this platform\n" ;
+	printlog "skipping test on this plattform\n" ;
 	}
 
 
@@ -959,7 +992,7 @@ use strict ;
 	    }
 	else
 	    {
-	    printlog "skipping test on this platform\n" ;
+	    printlog "skipping test on this plattform\n" ;
 	    }
 
 	# ---------------------
@@ -1093,7 +1126,6 @@ use strict ;
 
         # ---------------------
 
-
         printlogf "Search multfield *<field>";
         print LOG "\n--------------------\n" ;
 
@@ -1130,6 +1162,7 @@ use strict ;
 	    Check ([1,3,4,5,7,8,9,10,11], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
 	    }
 
+
         # ---------------------
 
         printlogf "Order, Group, Append";
@@ -1138,8 +1171,8 @@ use strict ;
         $set6 -> Search ({id => 5, '$order' => 'id', '$group' => 'name', '$append' => ';;'}) ;
 
             {
-            my $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) GROUP BY name ORDER BY id ;;' ;
-            $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = ?))) GROUP BY name ORDER BY id ;;' if ($set6 -> {'*Placeholders'}) ;
+            #my $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) GROUP BY name ORDER BY id ;;' ;
+            my $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  (  (id = ?))) GROUP BY name ORDER BY id ;; ' ; # if ($set6 -> {'*Placeholders'}) ;
             $should = 'SELECT dbixrs1.id, dbixrs1.name, dbixrs3.txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) GROUP BY name ORDER BY id ;;' if ($Driver eq 'mSQL') ;
             my $is     = $set6 -> LastSQLStatement ;
             if ($is ne $should) 
@@ -1193,6 +1226,75 @@ use strict ;
         Check ($TestIds[3], ['name', 'typ'], \@set7, 'typ') or print "ok\n" ;
 
         DBIx::Recordset::Undef ('set7') ;
+
+        # ---------------------
+
+        printlogf "!LongNames with !Fields";
+        print LOG "\n--------------------\n" ;
+
+        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  "$Table[0], $Table[3]",
+                                            '!TabRelation'  =>  "$Table[0].id=$Table[3].id",
+                                            '!LongNames'    =>  1,
+                                            '!Fields'       =>  "$Table[0].id, $Table[0].name, typ"}) or die "not ok ($DBI::errstr)" ;
+
+        my $names = $set7 -> Names ;
+        my $e = $errors ;
+
+        if ($#$names != 2)
+            {
+            printlog "ERROR in $lasttest: wrong number of names ($#$names)\n" ;
+	    $errors++ ;
+            }        
+        elsif ($names -> [0] ne "$Table[0].id" || $names -> [1] ne "$Table[0].name" || $names -> [2] ne "$Table[3].typ")
+            {
+            printlog "ERROR in $lasttest: names not ok (@$names)\n" ;
+	    $errors++ ;
+            }        
+            
+
+        print "ok\n" if ($e == $errors) ;
+
+
+        DBIx::Recordset::Undef ('set7') ;
+
+        # ---------------------
+
+        printlogf "!LongNames without !Fields";
+        print LOG "\n--------------------\n" ;
+
+        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  "$Table[0], $Table[3]",
+                                            '!TabRelation'  =>  "$Table[0].id=$Table[3].id",
+                                            '!LongNames'    =>  1,
+                                            }) or die "not ok ($DBI::errstr)" ;
+
+        $names = $set7 -> Names ;
+        $e = $errors ;
+
+        if ($#$names != 5)
+            {
+            printlog "ERROR in $lasttest: wrong number of names ($#$names)\n" ;
+	    $errors++ ;
+            }        
+        elsif ($names -> [0] ne "$Table[0].id" || $names -> [1] ne "$Table[0].name" ||
+               $names -> [2] ne "$Table[0].value1" || $names -> [3] ne "$Table[0].addon" ||
+               $names -> [4] ne "$Table[3].id" || $names -> [5] ne "$Table[3].typ")
+            {
+            printlog "ERROR in $lasttest: names not ok (@$names)\n" ;
+	    $errors++ ;
+            }        
+            
+
+        print "ok\n" if ($e == $errors) ;
+
+
+        DBIx::Recordset::Undef ('set7') ;
+
         }
 
     # ---------------------
@@ -1573,11 +1675,37 @@ use strict ;
 
     Check ([1234], $TestFields[0], \@set20c) or print "ok\n" ;
 
-    
-    
+    printlogf "Dirty";
+    print LOG "\n--------------------\n" ;
+
+    if ($set20->Dirty) 
+        {
+        print LOG "DIRTY: ok\n";
+        print "ok\n" ;
+        } 
+    else 
+        {
+	printlog "ERROR in $lasttest: not set\n" ;
+        $errors++;
+        }
+      
     # write it to the db
     print LOG "Flush\n" ;
     $set20 -> Flush () ;
+      
+    printlogf "";
+    if (!$set20->Dirty) 
+        {
+        print LOG "DIRTY: ok\n";
+        print "ok\n" ;
+        } 
+    else 
+        {
+	printlog "ERROR in $lasttest: set\n" ;
+        $errors++;
+        }
+  
+    
     
     AddTestRowAndId (0, {
                         'id'   => 1234,
@@ -1595,7 +1723,7 @@ use strict ;
                                             '!PrimKey'      =>  'id',
                                             'id'            =>  1234}) or die "not ok ($DBI::errstr)" ;
     
-    printlogf "";
+    printlogf "Array Update/Insert -> Flush 2";
     Check ([1234], $TestFields[0], \@set20c) or print "ok\n" ;
     
     
@@ -1744,6 +1872,24 @@ use strict ;
 
 
         Check ([2], $TestFields[1], \@set13h) or print "ok\n" ;
+    
+        # ---------------------
+
+        printlogf "Select name (Hash)";
+        print LOG "\n--------------------\n" ;
+
+        my %set13h2 ;
+
+        tie %set13h2, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  "$Table[1]",
+                                            '!PrimKey'      =>  'name2'} ;
+    
+        $set13h2[0] = $set13h2{'Third Name in Tab2'} ;
+
+
+        Check ([3], $TestFields[1], \@set13h2) or print "ok\n" ;
     
         # ---------------------
 
@@ -2034,6 +2180,16 @@ use strict ;
 	printlog "ERROR in $lasttest: Update should return undef\n" ;
 	$errors++ ;
 	}
+    elsif (!DBIx::Recordset -> LastError)
+	{
+	printlog "ERROR in $lasttest: LastError should return error message\n" ;
+	$errors++ ;
+	}
+    elsif (!$set14 -> LastError)
+	{
+	printlog "ERROR in $lasttest: LastError should return error message\n" ;
+	$errors++ ;
+	}
     else
 	{
         print "ok\n" ;
@@ -2055,9 +2211,14 @@ use strict ;
 					id => 9999},
                                         'qwert=!%&') ;
 
-    if (defined ($set14))
+    if (!DBIx::Recordset -> LastError)
 	{
-	printlog "ERROR in $lasttest: Update should return undef\n" ;
+	printlog "ERROR in $lasttest: LastError should return error message\n" ;
+	$errors++ ;
+	}
+    elsif (!$set14 -> LastError)
+	{
+	printlog "ERROR in $lasttest: LastError should return error message\n" ;
 	$errors++ ;
 	}
     else
@@ -2946,7 +3107,7 @@ use strict ;
 							sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
 							sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
 						    ],
-						1042   => 
+						1043   => 
 						    [ 
 							sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
 							sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
@@ -2959,8 +3120,204 @@ use strict ;
     
 
 	DBIx::Recordset::Undef ('set6') ;
-	}
+        }
+    
+    # ---------------------
 
+    if ($Driver ne 'CSV')
+	{
+        printlogf "DBIx::Database setup";
+        print LOG "\n--------------------\n" ;
+
+
+
+        my $db = DBIx::Database -> new ({'!DataSource'   =>  $DSN,
+				        '!Username'     =>  $User,
+				        '!Password'     =>  $Password,
+                                        '!KeepOpen'     => 1}) ;
+
+
+        my $tab ;
+        my $k ;
+        my $v ;
+        my $e = $errors ;
+        my $n ;
+
+        my $tables = $db -> AllTables ;
+
+        foreach (@Table)
+            {
+            if (!$tables -> {$_})
+                {
+                printlog "ERROR in $lasttest: table $_ not found\n" ;
+	        $errors++ ;
+                }        
+            my $l = $db -> TableLink ($_) ;
+            if ($_ eq $Table[1] && (($n = keys (%$l)) != 1 || !$l -> {"-$Table[3]"}))
+                {
+                printlog "ERROR in $lasttest: table $_ does not contains the right link  (#$n)\n" ;
+	        $errors++ ;
+                }        
+            elsif ($_ eq $Table[3] && (($n = keys (%$l)) != 1 || !$l -> {"-$Table[1]"}))
+                {
+                printlog "ERROR in $lasttest: table $_ does not contains the right link (#$n)\n" ;
+	        $errors++ ;
+                }        
+            elsif ($_ ne $Table[1] && $_ ne $Table[3] && keys (%$l) != 0)
+                {
+                printlog "ERROR in $lasttest: table $_ contains wrong link\n" ;
+	        $errors++ ;
+                }        
+            }
+
+        print "ok\n" if ($e == $errors) ;
+
+
+        $db -> TableAttr ('*', '!PrimKey', 'id') ;
+
+        # ---------------------
+
+
+        if ($Driver ne 'CSV')
+	    {
+	    printlogf "DBIx::Database and I/O Filter";
+	    print LOG "\n--------------------\n" ;
+            }
+
+            $db -> TableAttr ($Table[1], '!Filter', 
+						    {
+						    DBI::SQL_CHAR     => 
+						        [ 
+							    sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
+							    sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
+						        ],
+						    DBI::SQL_VARCHAR     => 
+						        [ 
+							    sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
+							    sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
+						        ],
+						    1043   => 
+						        [ 
+							    sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
+							    sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
+						        ]
+						    }) ;
+                            
+
+
+	    *set7 = DBIx::Recordset -> Search ({'!DataSource'   =>  $db,
+					         '!Table'        =>  $Table[1],
+					         'name2'         =>  '05.10.99',
+						    
+					         }) or die "not ok ($DBI::errstr)" ;
+
+
+        if ($Driver ne 'CSV')
+            {
+	    Check ($TestIds[1], $TestFields[1], \@set7) or print "ok\n" ;
+            }    
+
+        # ---------------------
+
+        printlogf "Attributes";
+        print LOG "\n--------------------\n" ;
+
+        if ($set7 -> PrimKey ne 'id')
+            {
+            printlog "ERROR in $lasttest: PrimKey not set\n" ;
+	    $errors++ ;
+            }        
+        else
+            {
+            print "ok\n"  ;
+            }
+
+        printlogf "";
+
+        if ($set7 -> TableName ne $Table[1])
+            {
+            printlog "ERROR in $lasttest: wrong TableName\n" ;
+	    $errors++ ;
+            }        
+        else
+            {
+            print "ok\n"  ;
+            }
+
+        DBIx::Recordset::Undef ('set7') ;
+
+
+        $db -> MetaData ($Table[4], undef, 1) ;
+        $db -> MetaData ($Table[5], undef, 1) ;
+
+
+        # ---------------------
+
+        printlogf "DBIx::Database !TableFilter";
+        print LOG "\n--------------------\n" ;
+
+
+
+        my $db2 = DBIx::Database -> new ({'!DataSource'   =>  $DSN,
+				        '!Username'     =>  $User,
+				        '!Password'     =>  $Password,
+                                        '!KeepOpen'     => 1,
+                                        '!TableFilter'  => 'dbix_'}) ;
+
+
+        $e = $errors ;
+
+        my $tables = $db2 -> AllTables ;
+
+        if (($n = keys (%$tables)) != 2)
+            {
+            printlog "ERROR in $lasttest: wrong number of table (#$n)\n" ;
+	    $errors++ ;
+            }
+
+        foreach (($Table[4], $Table[5]))
+            {
+            if (!$tables -> {$_})
+                {
+                printlog "ERROR in $lasttest: table $_ not found\n" ;
+	        $errors++ ;
+                }        
+
+            my $l = $db -> TableLink ($_) ;
+            if ($_ eq $Table[4] && (($n = keys (%$l)) != 4 || !$l -> {"-rs5"} || !$l -> {"-up__rs5"}  || !$l -> {"-a__rs6"} || !$l -> {"-b__rs6"}))
+                {
+                printlog "ERROR in $lasttest: table $_ does not contains the right link  (#$n)\n" ;
+	        $errors++ ;
+                }        
+            elsif ($_ eq $Table[5] && (($n = keys (%$l)) != 1 || !$l -> {"-rs5"}))
+                {
+                printlog "ERROR in $lasttest: table $_ does not contains the right link (#$n)\n" ;
+	        $errors++ ;
+                }        
+            elsif ($_ ne $Table[4] && $_ ne $Table[5])
+                {
+                printlog "ERROR in $lasttest: table $_ contains wrong link\n" ;
+	        $errors++ ;
+                }        
+            }
+
+        print "ok\n" if ($e == $errors) ;
+
+        $db = undef ;
+        $db2 = undef ;
+        }
+
+    #########################################################################################
+
+     # cleanup
+     if (!$nocleanup)
+        {
+        my  $dbh = DBIx::Recordset -> SetupObject ({'!DataSource' =>  $DSN,
+                                                 '!Username' =>  $User, '!Password' =>  $Password
+                                                });
+        DropTestTables($dbh, @Table);
+        $dbh->Disconnect;
+        }
 
     #########################################################################################
 
@@ -3002,6 +3359,7 @@ if ($#ARGV != -1)
     $DSN         = $ARGV[1] || $Drivers{$Driver}{dsn} ; 
     $User        = $ARGV[2] || $Drivers{$Driver}{user}  ;
     $Password    = $ARGV[3] || $Drivers{$Driver}{pass}  ;
+    $nocleanup   = $ARGV[4] || 0 ;
 
     $> = $Drivers{$Driver}{uid} if (defined ($Drivers{$Driver}{uid})) ;
     $rc = DoTest ($Driver, $DSN, $User, $Password) ;
