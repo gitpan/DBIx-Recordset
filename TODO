@@ -31,6 +31,7 @@ Bugs
 - sometimes errors are not reported when updateing an array, until
   Flush is called [Robert 1.5.00]
 
+- Informix: NAME_lc -> NAME  [Yevgeniy Furman 21.6.00]
 
 Tests
 -----

@@ -12,7 +12,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Recordset.pm,v 1.63 2000/06/19 11:08:00 richter Exp $
+#   $Id: Recordset.pm,v 1.73 2000/09/22 05:34:29 richter Exp $
 #
 ###################################################################################
 
@@ -47,7 +47,9 @@ sub savecroak
     $LastErr	= $self->{'*LastErr'}	    = $code || $dbi::err || -1 ;
     $LastErrstr = $self->{'*LastErrstr'}    = $msg || $DBI::errstr || ("croak from " . caller) ;
 
-    Carp::croak $msg ;
+    #$Carp::extra = 1 ;
+    #Carp::croak $msg ;
+    Carp::confess $msg ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -207,14 +209,16 @@ sub QueryMetaData($$)
 
     foreach $tab (@tabs)
         {
-        $sth = &{$ListFields}($hdl, $tab) or $self -> savecroak ("Cannot list fields for $tab ($DBI::errstr)") ;
+        next if ($tab =~ /^\s*$/) ;
+    
+        $sth = &{$ListFields}($hdl, $tab) or carp ("Cannot list fields for $tab ($DBI::errstr)") ;
 	$ltab = $tab ;
 	
         my $types ;
-        my $fields = $sth -> FETCH ($PreserveCase?'NAME':'NAME_lc')  ;
+        my $fields = $sth?$sth -> FETCH ($PreserveCase?'NAME':'NAME_lc'):[]  ;
         my $num = $#{$fields} + 1 ;
     
-        if ($HaveTypes)
+        if ($HaveTypes && $sth)
             {
             #print DBIx::Recordset::LOG "DB: Have Types for driver\n" ;
             $types = $sth -> FETCH ('TYPE')  ;
@@ -244,7 +248,7 @@ sub QueryMetaData($$)
             push @FullNames, "$ltab.$_"  ;
             }        
 
-        $sth -> finish ;
+        $sth -> finish if ($sth) ;
 
         # Set up a hash which tells us which fields to quote and which not
         # We setup two versions, one with tablename and one without
@@ -389,7 +393,9 @@ sub QueryMetaData($$)
 		    $ltab   = join ('_', @part[0..$i]) ;
 		    $lfield = join ('_', @part[$i + 1..$#part]) ;
             
-		    if (!$tables -> {$ltab} && $tables -> {"$tf$ltab"}) 
+		    next if (!$ltab) ;
+                    
+                    if (!$tables -> {$ltab} && $tables -> {"$tf$ltab"}) 
                         { $fullltab = "$tabfilter$ltab" }
                     else
                         { $fullltab = $ltab }
@@ -406,7 +412,9 @@ sub QueryMetaData($$)
 			    #my $metakeyby    = "$self->{'*DataSource'}//$ltab" ;
 			    #my $linkedby = $DBIx::Recordset::Metadata{$metakeyby} -> {'*Links'} ;
 			    my $linkedby = $metakey -> {'*Links'} ;
-			    $linkedby -> {"-$tableshort"} = {'!Table' => $fullntab, '!MainField' => $lfield, '!LinkedField' => "$prefix$n", '!LinkedBy' => $fullltab, '!MainTable' => $fullltab} ;
+			    my $linkedbyname = "\*$prefix$tableshort" ;
+                            $linkedby -> {$linkedbyname} = {'!Table' => $fullntab, '!MainField' => $lfield, '!LinkedField' => "$prefix$n", '!LinkedBy' => $fullltab, '!MainTable' => $fullltab} ;
+			    #$linkedby -> {"-$tableshort"} = $linkedby -> {$linkedbyname} if (!exists ($linkedby -> {"-$tableshort"})) ;
 			    }
 			last ;
 			}
@@ -417,6 +425,7 @@ sub QueryMetaData($$)
 	    { 
 	    foreach $ltab (@tabs)
 		{
+                next if (!$ltab) ;
                 $metakey = $self -> QueryMetaData ($ltab) ;
 
 		my $k ;
@@ -927,7 +936,7 @@ require Exporter;
 
 @ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.21';
+$VERSION = '0.22';
 
 
 $PreserveCase = 0 ;
@@ -1287,7 +1296,7 @@ sub SetupObject
 
     if ($self -> {'*Serial'}) 
         {
-        $self->{'*PrimKey'}     = $self -> {'*Serial'} ;
+        $self->{'*PrimKey'}     = $self -> {'*Serial'} if (!($parm->{'!PrimKey'} && !$parm->{'!Serial'})) ;
         $self->{'*Sequence'}    ||= "$self->{'*Table'}_seq" ;
     
         if ($self->{'*SeqClass'})
@@ -1319,6 +1328,8 @@ sub SetupObject
     $self->{'*CurrRow'}     = 0 ;
     $self->{'*Stats'} = {} ;
     $self->{'*CurrRecStack'} = [] ;
+
+    $self->{'*LinkSet'} = {} ;
     $LastErr	= $self->{'*LastErr'}	    = undef ;
     $LastErrstr = $self->{'*LastErrstr'}    = undef ;
 
@@ -1471,7 +1482,7 @@ sub Undef
     print LOG "DB:  Undef $objname\n" if (defined (${$objname}) && (${$objname}->{'*Debug'} > 1 || $Debug > 1)) ; 
     
     
-    if (defined (${$objname})) 
+    if (defined (${$objname}) && ref (${$objname}) && UNIVERSAL::isa (${$objname}, 'DBIx::Recordset')) 
         {
         # Cleanup rows and write them if necessary
         ${$objname} -> ReleaseRecords () ;
@@ -1487,7 +1498,7 @@ sub Undef
 
     #${$objname} = undef ;
     untie %{$objname} ;
-    undef ${$objname} ;
+    undef ${$objname} if (defined (${$objname}) && ref (${$objname})) ;
     untie @{$objname} ;
     }
 
@@ -2407,6 +2418,9 @@ sub FETCH
                 $dat = $data -> [$fetch] = undef ;
                 #print LOG "new dat undef\n"  ;
     	        $self->{'*EOD'} = 1 ;
+		$sth -> finish ;
+                print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+                undef $self->{'*StHdl'} ;
                 }
             }
         $self->{'*CurrRow'} = $row ;
@@ -2452,18 +2466,34 @@ sub FETCH
 
 ## ----------------------------------------------------------------------------
 ## 
+## Reset ...
+##
+## position the record pointer before the first row, just as same as after Search
+##
+
+sub Reset ($)
+    {
+    my $self = shift ;
+
+    $self->{'*LastRecord'} = undef ;
+    $self ->{'*LastRow'}   = 0 ;
+    }
+
+## ----------------------------------------------------------------------------
+## 
 ## First ...
 ##
 ## position the record pointer to the first row and return it
 ##
 
 sub First ($;$)
-    {
-    my $rec = $_[0] -> FETCH (0) ;
-    return $rec if (defined ($rec) || !$_[1]) ;
 
+    {
+    my ($self, $new) = @_ ;
+    my $rec = $self -> FETCH (0) ;
+    return $rec if (defined ($rec) || !$new) ;
     # create new record 
-    return $_[0] -> STORE (0) ;
+    return $self -> {'*LastRecord'} = $self -> STORE (0) ;
     }
 
 
@@ -2493,13 +2523,19 @@ sub Last ($)
 
 sub Next ($;$)
     {
-    my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'}  ;
-    $n++ if ($_[0] ->{'*CurrRow'} > 0 || $_[0] ->{'*EOD'}) ; 
-    my $rec = $_[0] -> FETCH ($n) ;
-    return $rec if (defined ($rec) || !$_[1]) ;
+    my ($self, $new) = @_ ;
+    my $lr   =  $self -> {'*LastRow'} ;
+
+    $lr -= $self -> {'*FetchStart'} ;
+    $lr = 0 if ($lr < 0) ;
+    $lr++ if (defined ($self -> {'*LastRecord'})) ;
+
+    ##$lr++ if ($_[0] ->{'*CurrRow'} > 0 || $_[0] ->{'*EOD'}) ; 
+    my $rec = $self -> FETCH ($lr) ;
+    return $rec if (defined ($rec) || !$new) ;
 
     # create new record 
-    return $_[0] -> STORE ($n) ;
+    return $self -> {'*LastRecord'} = $self -> STORE ($lr) ;
     }
 
 
@@ -2525,15 +2561,17 @@ sub Prev ($)
 
 sub Curr ($;$)
     {
+    my ($self, $new) = @_ ;
+
     my $lr ;
     return $lr if ($lr = $self->{'*LastRecord'}) ; 
 
-    my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'} ;
-    my $rec = $_[0] -> FETCH ($n) ;
-    return $rec if (defined ($rec) || !$_[1]) ;
+    my $n = $self ->{'*LastRow'} - $self -> {'*FetchStart'} ;
+    my $rec = $self -> FETCH ($n) ;
+    return $rec if (defined ($rec) || !$new) ;
 
     # create new record 
-    return $_[0] -> STORE ($n) ;
+    return $self -> STORE ($n) ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -2990,7 +3028,7 @@ sub BuildWhere ($$$$)
 
                 if ($Debug > 3) { local $^W = 0 ; print LOG "DB:  Key $key gives $vexp bind_values = <@$bind_values> bind_types=<@$bind_types>\n" ; }
             
-                $expr = "$expr $econj ($vexp)" ;
+                $expr = "$expr $econj ($vexp)" if ($vexp) ;
             
                 $econj ||= $$where{'$conj'} || ' and ' ; 
                 }
@@ -3935,6 +3973,51 @@ package DBIx::Recordset::Hash ;
 
 use Carp ;
 
+
+## ----------------------------------------------------------------------------
+##
+## PreFetch
+##
+## Prefetch data
+##
+##
+
+sub PreFetch
+    
+    {
+    my ($self, $rs) = @_ ;
+    my $where = $self -> {'*PreFetch'} ;
+    my %keyhash ;
+    my $rec ;
+    $rs -> Search ($where eq '*'?undef:$where) or return undef ;
+    my $primkey = $rs -> {'*PrimKey'} or $rs -> savecroak ('Need !PrimKey') ;
+    while ($rec = $rs -> Next)
+        {
+        $keyhash{$rec -> {$primkey}} = $rec ;
+        }
+    $self -> {'*KeyHash'} = \%keyhash ;
+    $self -> {'*ExpiresTime'} = time + $self -> {'*Expires'} if ($self -> {'*Expires'} > 0) ;
+    }
+
+## ----------------------------------------------------------------------------
+##
+## PreFetchIfExpires
+##
+## Prefetch data
+##
+##
+
+sub PreFetchIfExpires
+    
+    {
+    my ($self, $rs) = @_ ;
+    
+    return if (!defined ($self -> {'*ExpiresTime'}) && $self -> {'*ExpiresTime'} < time) ;
+    return if (ref ($self -> {'*Expires'}) ne 'CODE' || ! (&{$self -> {'*Expires'}}($self))) ;
+    
+    $self -> PreFetch ($rs) ;
+    }
+
 ## ----------------------------------------------------------------------------
 ##
 ## TIEHASH
@@ -3948,14 +4031,24 @@ sub TIEHASH
     {
     my ($class, $arg) = @_ ;
     my $rs ;    
-    
+    my $keyhash ;
+
+    my $self ;
+
     if (ref ($arg) eq 'HASH')
         {
+        $self = 
+                {
+                '*Expires'   => $arg -> {'!Expires'},
+                '*PreFetch'  => $arg -> {'!PreFetch'},
+                } ;
+
         $rs = DBIx::Recordset -> SetupObject ($arg) or return undef ;
         }
     elsif (ref ($arg) eq 'DBIx::Recordset')
         {
         $rs = $arg ;
+        $self = {} ;
         }
     else
         {
@@ -3963,10 +4056,12 @@ sub TIEHASH
         }
 
 
-    my $self = {'*Recordset' => $rs} ;
+    $self -> {'*Recordset'} = $rs ;
 
     bless ($self, $class) ;
-    
+ 
+    $self -> PreFetch ($rs) if ($self -> {'*PreFetch'}) ;
+
     return $self ;
     }
 
@@ -3989,21 +4084,30 @@ sub FETCH
     
     my $h ;
 
-    print DBIx::Recordset::LOG "DB:  Hash::FETCH \{" . (defined ($fetch)?$fetch:'<undef>') ."\}\n"  if ($rs->{'*Debug'} > 3) ;
-
-    if (!defined ($rs->{'*LastKey'}) || $fetch ne $rs->{'*LastKey'})
+    if ($self -> {'*PreFetch'}) 
         {
-        $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, undef, undef, [$fetch], [$rs->{'*Type4Field'}{$rs->{'*PrimKey'}}]) or return undef ; 
-    
-        $h = $rs -> FETCH (0) ;
+        $self -> PreFetchIfExpires ($rs) ;
+
+        $h = $self -> {'*KeyHash'} -> {$fetch} ;
         }
     else
-        {
-        $h = $rs -> Curr ;
+        {    
+        print DBIx::Recordset::LOG "DB:  Hash::FETCH \{" . (defined ($fetch)?$fetch:'<undef>') ."\}\n"  if ($rs->{'*Debug'} > 3) ;
+
+        if (!defined ($rs->{'*LastKey'}) || $fetch ne $rs->{'*LastKey'})
+            {
+            $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, undef, undef, [$fetch], [$rs->{'*Type4Field'}{$rs->{'*PrimKey'}}]) or return undef ; 
+    
+            $h = $rs -> FETCH (0) ;
+            }
+        else
+            {
+            $h = $rs -> Curr ;
+            }
         }
 
     print DBIx::Recordset::LOG "DB:  Hash::FETCH return " . (defined ($h)?$h:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
-    
+  
     return $h ;
     }
 
@@ -4023,7 +4127,9 @@ sub STORE
 
     print DBIx::Recordset::LOG "DB:  ::Hash::STORE \{" . (defined ($key)?$key:'<undef>') . "\} = " . (defined ($value)?$value:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
 
-    croak "Hash::STORE need hashref as value" if (!ref ($value) eq 'HASH') ;
+    $rs -> savecroak ("Hash::STORE need hashref as value") if (!ref ($value) eq 'HASH') ;
+
+    $rs -> savecroak ("Hash::STORE doesn't work with !PreFetch") if ($self -> {'*PreFetch'}) ;
 
     my %dat = %$value ;                 # save values, if any
     $dat{$rs -> {'*PrimKey'}} = $key ;  # setup primary key value
@@ -4046,7 +4152,21 @@ sub STORE
 
 sub FIRSTKEY 
     {
-    my $rs    = $_[0]->{'*Recordset'} ;  
+    my $self  = shift ;
+
+    my $rs    = $self->{'*Recordset'} ;  
+    my $primkey = $rs->{'*PrimKey'}  ;
+
+
+    if ($self -> {'*PreFetch'}) 
+        {
+        $self -> PreFetchIfExpires ($rs) ;
+        
+        my $keyhash = $self -> {'*KeyHash'} ;
+        my $foo = keys %$keyhash ; # reset iterator
+
+        return each %$keyhash ;
+        }
 
     $rs->SQLSelect () or return undef ; 
 
@@ -4065,7 +4185,16 @@ sub FIRSTKEY
 
 sub NEXTKEY 
     {
-    my $rs    = $_[0]->{'*Recordset'} ;  
+    my $self  = shift ;
+    my $rs    = $self->{'*Recordset'} ;  
+
+    if ($self -> {'*PreFetch'}) 
+        {
+        ##$self -> PreFetchIfExpires ($rs) ;
+        
+        my $keyhash = $self -> {'*KeyHash'} ;
+        return each %$keyhash ;
+        }
 
     my $dat   = $rs -> Next () or return undef ;
     my $key   = $dat -> {$rs->{'*PrimKey'}} ;
@@ -4082,7 +4211,18 @@ sub NEXTKEY
 
 sub EXISTS
     {
-    return defined ($_[0] -> FETCH ($_[1])) ;
+    my ($self, $key)  = @_ ;
+
+    if ($self -> {'*PreFetch'}) 
+        {
+        my $rs    = $self->{'*Recordset'} ;  
+        $self -> PreFetchIfExpires ($rs) ;
+        
+        my $keyhash = $self -> {'*KeyHash'} ;
+        return exists ($keyhash -> {$key}) ;
+        }
+
+    return defined ($self -> FETCH ($key)) ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -4310,14 +4450,47 @@ sub FETCH
 		{ 
 		$mv = $dat -> {"$link->{'!MainTable'}.$link->{'!MainField'}"} ;
 		}
-	    my $setup = {%$link} ;
-            $setup -> {$lf} = $mv ;
-            $setup -> {'!Default'} = { $lf => $mv } ;
-            $setup -> {'!DataSource'} = $rs if (!defined ($link -> {'!DataSource'})) ;
-            $data = $self -> {'*data'}{$key} = DBIx::Recordset -> Search ($setup) ;
-            #delete $link -> {'!Recordset'} if (ref ($link -> {'!DataSource'})) ; # avoid backlinks
-            print DBIx::Recordset::LOG "DB:  Row::FETCH $key = Setup New Recordset for table $link->{'!Table'}, $lf = " . (defined ($mv)?$mv:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
-	    my $of = $rs -> {'*OutputFunctions'}{$key} ;
+            if ($link -> {'!RowOnly'})
+                {
+                my $linkset = $rs -> {'*LinkSet'}{$key} ;
+                if (!$linkset)
+                    {
+	            my $setup = {%$link} ;
+                    $setup -> {'!PrimKey'} = $lf ;
+                    $setup -> {'!DataSource'} = $rs if (!defined ($link -> {'!DataSource'})) ;
+                    my %linkset ;
+                    print DBIx::Recordset::LOG "DB:  Row::FETCH $key = Setup New Recordset for table $link->{'!Table'}, $lf = " . (defined ($mv)?$mv:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
+                    $rs -> {'*LinkSet'}{$key} = $linkset = tie %linkset, 'DBIx::Recordset::Hash', $setup ;
+                    }
+                $data = $linkset -> FETCH ($mv) ;            
+                }
+            else
+                {
+                my $linkkey = "$key-$lf-$mv" ;
+                my $linkset = $rs -> {'*LinkSet'}{$linkkey} ;
+                if (!$linkset)
+                    {
+	            my $setup = {%$link} ;
+                    $setup -> {$lf} = $mv ;
+                    $setup -> {'!Default'} = { $lf => $mv } ;
+                    $setup -> {'!DataSource'} = $rs if (!defined ($link -> {'!DataSource'})) ;
+                    print DBIx::Recordset::LOG "DB:  Row::FETCH $key = Setup New Recordset for table $link->{'!Table'}, $lf = " . (defined ($mv)?$mv:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
+
+                    $linkset = $self -> {'*data'}{$key} = DBIx::Recordset -> Search ($setup) ;
+
+                    if ($link -> {'!Cache'})
+                        {
+                        $rs -> {'*LinkSet'}{$linkkey} = $linkset ;
+                        }
+                    }
+                else
+                    {
+                    $linkset -> Reset ;
+                    }
+                $data = $linkset ;
+                }
+
+            my $of = $rs -> {'*OutputFunctions'}{$key} ;
 	    $data = &{$of}($data) if ($of) ;	    
             }
         }
@@ -4978,6 +5151,41 @@ the link feature with such a row.
 Set the debug level. See DEBUGGING.
 
 
+=item B<!PreFetch>
+
+Only for tieing a hash! Gives an where expression (either as string or as hashref) 
+that is used to prefetch records from that
+database. All following accesses to the tied hash only access this prefetched data and
+don't execute any database queries. See C<!Expires> how to force a refetch.
+Giving a '*' as value to C<!PreFetch> fetches the whole table into memory.
+
+ The following example prefetches all record with id < 7:
+
+ tie %dbhash, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  'foo',
+                                        '!PreFetch'     =>  {
+                                                             '*id' => '<',
+                                                             'id' => 7
+                                                            },
+                                        '!PrimKey'      =>  'id'} ;
+
+ The following example prefetches all records:
+
+ tie %dbhash, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  'bar',
+                                        '!PreFetch'     =>  '*',
+                                        '!PrimKey'      =>  'id'} ;
+
+=item B<!Expires>
+
+Only for tieing a hash! If the values is numeric, the prefetched data will be refetched 
+is it is older then the given number of seconds. If the values is a CODEREF the function
+is called and the data is refetched is the function returns true.
+
 =head2 Where Parameters
 
 The following parameters are used to build an SQL WHERE expression
@@ -5333,6 +5541,11 @@ B<params:> setup (only syntax 1), execute, where, search, fields
 
 Same as DBI. Executes a single SQL statement on the open database.
 
+=item B<$set -E<gt> Reset ()>
+
+Set the record pointer to the initial state, so the next call to 
+
+C<Next> returns the first row.
 
 =item B<$set -E<gt> First ()>
 
@@ -5818,21 +6031,18 @@ automatically recognized as a pointer to street.id.
 				     '!Table'	   => 'name') ;
 
 is enough. DBIx::Recordset will automatically add the !Links attribute. 
-Additionally, DBIx::Recordset adds a backlink, so for the table street, in our above example,
-there will be a link, named -name, which is a pointer from table street to all records in the
+Additionally, DBIx::Recordset adds a backlink (which starts with a star ('*')), so for the
+table street, in our above example,
+there will be a link, named *name, which is a pointer from table street to all records in the
 table name where street.id is equal to name.street_id.
 
 You may use the
 !Links attribute to specify links which can not be automatically detected.
 
-NOTE: Because of the backlinks DBIx::Recordset cannot handle links to the table itself correctly,
-In this case it tries to add two links with the same name and only one can win. This behaviour will be 
-corrected in a future release. For now you need to add the correct link manually via the !Links
-attribute.
-
 NOTE: To specify more then one link from one table to another table, you may prefix the field name
 with an specifier followed by two underscores. Example:  first__street_id, second__street_id.
-
+The link (and backlink) names are named with the prefix, e.g. -first__street and the backlink
+*first__name.
 
 
 =head1 DBIx::Database
@@ -6145,6 +6355,8 @@ Currently, there are definitions for:
 =item B<DBD::Sysbase>
 
 =item B<DBD::Informix>
+
+=item B<DBD::InterBase>
 
 DBIx::Recordset has been tested with all those DBD drivers (on Linux 2.0.32, except 
 DBD::ODBC, which has been tested on Windows '95 using Access 7 and with MS SQL Server).

@@ -1936,6 +1936,62 @@ use strict ;
         }
 
     # ---------------------
+        {
+        printlogf "Select name (PreFetch Hash)";
+        print LOG "\n--------------------\n" ;
+
+        my %set13h3 ;
+        my @set13h3 ;
+
+        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[0],
+                                            '!PreFetch'     =>  {'*id' => '<', 'id' => 7},
+                                            '!PrimKey'      =>  'id'} ;
+    
+        $set13h3[0] = $set13h3{2} ;
+
+
+        Check ([2], $TestFields[0], \@set13h3) or print "ok\n" ;
+    
+        # ---------------------
+
+        printlogf "Iterate over ::Hash PreFetch";
+        print LOG "\n--------------------\n" ;
+        #
+            {
+            my $i ;
+            my $v ;
+            my $k ;
+            my $n ;
+            my @set13h ;
+
+            $i = 0 ;
+            while (($k, $v) = each %set13h3)
+                {
+                @set13h = () ;
+                $set13h[0] = $v ;
+                printlogf "" if ($i > 0) ;
+                Check ([$k], $TestFields[0], \@set13h) or print "ok\n" ;
+                $i++ ;
+                }
+    
+            $n = 6 ;
+            if ($i != $n)
+                {
+                print "ERROR in $lasttest\n" ;
+                print "Not enougth records (get $i, expected $n)\n" ;
+                $errors++ ;         
+                }
+            }
+
+        #untie %set13h ;
+        #@set13h = () ;
+        #DBIx::Recordset::Undef ('set13') ;
+        }
+
+    # ---------------------
 
 
     *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
@@ -2361,6 +2417,21 @@ use strict ;
                                           })  or die "not ok ($DBI::errstr)" ;
 
     {
+    my $r ;
+    my @r ;
+    push @r, $r while ($r = $set9 -> Next) ;
+
+    Check ($TestIds[1], $TestFields[1], \@r) or print "ok\n" ;
+    }
+
+# ---------------------
+
+    printlogf "Use Reset/Next to get all records";
+    print LOG "\n--------------------\n" ;
+
+    {
+    $set9 -> Reset ;
+
     my $r ;
     my @r ;
     push @r, $r while ($r = $set9 -> Next) ;
@@ -3187,6 +3258,12 @@ use strict ;
 
         my $tables = $db -> AllTables ;
 
+        foreach (keys %$tables)
+            {
+            print LOG "Found table: $_\n" ;
+            }
+
+
         foreach (@Table)
             {
             if (!$tables -> {$_})
@@ -3200,7 +3277,7 @@ use strict ;
                 printlog "ERROR in $lasttest: table $_ does not contains the right link  (#$n)\n" ;
 	        $errors++ ;
                 }        
-            elsif ($_ eq $Table[3] && (($n = keys (%$l)) != 1 || !$l -> {"-$Table[1]"}))
+            elsif ($_ eq $Table[3] && (($n = keys (%$l)) != 1 || !$l -> {"*$Table[1]"}))
                 {
                 printlog "ERROR in $lasttest: table $_ does not contains the right link (#$n)\n" ;
 	        $errors++ ;
@@ -3326,14 +3403,22 @@ use strict ;
                 }        
 
             my $l = $db -> TableLink ($_) ;
-            if ($_ eq $Table[4] && (($n = keys (%$l)) != 4 || !$l -> {"-rs5"} || !$l -> {"-up__rs5"}  || !$l -> {"-a__rs6"} || !$l -> {"-b__rs6"}))
+            if ($_ eq $Table[4] && (($n = keys (%$l)) != 4 || !$l -> {"-up__rs5"} || !$l -> {"*up__rs5"}  || !$l -> {"-a__rs6"} || !$l -> {"-b__rs6"}))
                 {
                 printlog "ERROR in $lasttest: table $_ does not contains the right link  (#$n)\n" ;
+                foreach my $link (keys %$l)
+                    {
+                    print LOG "Found link $link\n" ;
+                    }
 	        $errors++ ;
                 }        
-            elsif ($_ eq $Table[5] && (($n = keys (%$l)) != 1 || !$l -> {"-rs5"}))
+            elsif ($_ eq $Table[5] && (($n = keys (%$l)) != 2 || !$l -> {"*a__rs5"}|| !$l -> {"*b__rs5"}))
                 {
                 printlog "ERROR in $lasttest: table $_ does not contains the right link (#$n)\n" ;
+                foreach my $link (keys %$l)
+                    {
+                    print LOG "Found link $link\n" ;
+                    }
 	        $errors++ ;
                 }        
             elsif ($_ ne $Table[4] && $_ ne $Table[5])

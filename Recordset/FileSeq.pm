@@ -12,7 +12,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: FileSeq.pm,v 1.3 2000/06/16 13:54:43 richter Exp $
+#   $Id: FileSeq.pm,v 1.4 2000/06/26 05:16:18 richter Exp $
 #
 ###################################################################################
 

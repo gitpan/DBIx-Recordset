@@ -106,6 +106,7 @@ Currently there are entries for
 - DBD::Sybase 
 - DBD::CSV
 - DBD::Informix 
+- DBD::InterBase
 
 If you create your own entry please send it to me, so I can include it
 in the next release.
