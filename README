@@ -15,16 +15,15 @@ MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 
 OVERVIEW
 
-DBIx::Recordset is a perl module which handles a lot of always repeating
-tasks in database access for you.
+DBIx::Recordset is a perl module for abstraction and simplification of
+database access.
 
 The goal is to make standard database access (select/insert/update/delete)
-easier to handle (e.g. web application or scripts to enter/retrieve
-data to/from a database). Special attention is made on web applications to make
-it possible to handle the state-less access and to process the posted data
-of formfields.
-The programmer only has to supply the absolutely necessary information, the
-rest is done by DBIx::Recordset.
+easier to handle and independend of the underlying DBMS. Special attention is
+made on web applications to make it possible to handle the state-less access
+and to process the posted data of formfields, but DBIx::Recordset is not
+limited to web applications.
+
 
 The main features of DBIx::Recordset are:
 
@@ -103,7 +102,7 @@ Currently there are entries for
 - DBD::Pg
 - DBD::Solid
 - DBD::ODBC
-- DBD::Oracle (requires DBD::Orcale 0.60 or higher)
+- DBD::Oracle (requires DBD::Oracle 0.60 or higher)
 - DBD::Sybase 
 - DBD::CSV
 - DBD::Informix 

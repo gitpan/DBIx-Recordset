@@ -12,7 +12,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Recordset.pm,v 1.34 2000/01/06 20:09:17 richter Exp $
+#   $Id: Recordset.pm,v 1.63 2000/06/19 11:08:00 richter Exp $
 #
 ###################################################################################
 
@@ -125,7 +125,7 @@ sub do($$;$$$)
 
     if (@params > 1 && ref ($bval = $params[0]) eq 'ARRAY' && ref ($btype = $params[1]) eq 'ARRAY')
         {
-        print DBIx::Recordset::LOG "DB:  do '$statement' bind_values=<@$bval> bind_types=<@$btype>\n" if ($self->{'*Debug'} > 1) ;
+        if ($self->{'*Debug'} > 1) { local $^W = 0 ; print DBIx::Recordset::LOG "DB:  do '$statement' bind_values=<@$bval> bind_types=<@$btype>\n" } ;
         $dbh = $self->{'*DBHdl'} ;
         $sth = $dbh -> prepare ($statement, $attribs) ;
         my $Numeric = $self->{'*NumericTypes'} || {} ;
@@ -134,9 +134,11 @@ sub do($$;$$$)
             {
             for (my $i = 0 ; $i < @$bval; $i++)
                 {
-                $bval -> [$i] += 0 if (defined ($bval -> [$i]) && $Numeric -> {$btype -> [$i]}) ;
+                $bval -> [$i] += 0 if (defined ($bval -> [$i]) && defined ($btype -> [$i]) && $Numeric -> {$btype -> [$i]}) ;
                 #$sth -> bind_param ($i+1, $bval -> [$i], $btype -> [$i]) ;
-                $sth -> bind_param ($i+1, $bval -> [$i], $btype -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef ) ;
+                #$sth -> bind_param ($i+1, $bval -> [$i], $btype -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef ) ;
+		my $bt = $btype -> [$i] ;
+                $sth -> bind_param ($i+1, $bval -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE=>$bt}:undef ) ;
                 }
             $ret = $sth -> execute ;
             }
@@ -148,7 +150,7 @@ sub do($$;$$$)
         $ret = $self->{'*DBHdl'} -> do ($statement, $attribs, @params) ;
         }
 
-    print DBIx::Recordset::LOG "DB:  do returned $ret\n" if ($self->{'*Debug'} > 2) ;
+    print DBIx::Recordset::LOG "DB:  do returned " . (defined ($ret)?$ret:'<undef>') . "\n" if ($self->{'*Debug'} > 2) ;
     print DBIx::Recordset::LOG "DB:  ERROR $DBI::errstr\n"  if (!$ret && $self->{'*Debug'}) ;
     print DBIx::Recordset::LOG "DB:  in do $statement <@params>\n" if (!$ret && $self->{'*Debug'} == 1) ;
 
@@ -209,13 +211,13 @@ sub QueryMetaData($$)
 	$ltab = $tab ;
 	
         my $types ;
-        my $fields = $sth -> {($PreserveCase?'NAME':'NAME_lc')}  ;
+        my $fields = $sth -> FETCH ($PreserveCase?'NAME':'NAME_lc')  ;
         my $num = $#{$fields} + 1 ;
     
         if ($HaveTypes)
             {
             #print DBIx::Recordset::LOG "DB: Have Types for driver\n" ;
-            $types = $sth -> {TYPE}  ;
+            $types = $sth -> FETCH ('TYPE')  ;
             }
         else
             {
@@ -329,7 +331,7 @@ sub QueryMetaData($$)
                 my $tabfilter = $self -> {'*TableFilter'} || '.' ;
                 foreach (@tabs)
                     {
-                    if ($_ =~ /$tabfilter/i)
+                    if ($_ =~ /(^|\.)$tabfilter/i)
                         {
                         @stab = split (/\./);
                         $stab = $PreserveCase?(pop @stab):lc (pop @stab) ;
@@ -350,7 +352,7 @@ sub QueryMetaData($$)
 		}
             
             $DBIx::Recordset::Metadata{$metakeydsn} = $metadsn ;
-            $DBIx::Recordset::Metadata{"$metakeydsn$self->{'*TableFilter'}"} = $tabmetadsn ;
+            $DBIx::Recordset::Metadata{"$metakeydsn$self->{'*TableFilter'}"} = $tabmetadsn if ($self->{'*TableFilter'}) ;
             }
 
 	if ($#tabs <= 0)
@@ -598,7 +600,7 @@ sub new
             $tabfilter ||= '.' ;
             foreach (@tabs)
                 {
-                if ($_ =~ /$tabfilter/i)
+                if ($_ =~ /(^|\.)$tabfilter/i)
                     {
                     @stab = split (/\./);
                     $stab = $PreserveCase?(pop @stab):lc (pop @stab) ;
@@ -784,7 +786,7 @@ sub AllTables
 
     {
     my $self = shift ;
-    my $metakeydsn = "$self->{'*DataSource'}//-$self->{'*TableFilter'}" ;
+    my $metakeydsn = "$self->{'*DataSource'}//-" . ($self->{'*TableFilter'} || '') ;
     my $metadsn    = $DBIx::Recordset::Metadata{$metakeydsn} || {} ;
     return $metadsn -> {'*Tables'} ;
     }
@@ -925,7 +927,7 @@ require Exporter;
 
 @ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.20-beta';
+$VERSION = '0.21';
 
 
 $PreserveCase = 0 ;
@@ -1211,6 +1213,7 @@ sub SetupMemberVar
 	{
 	$self -> {$sn} = $default ;
 	}
+    print LOG "DB:  Setup: $pn = " . (defined ($self->{$sn})?$self->{$sn}:'<undef>') . "\n" if ($self -> {'*Debug'} > 2) ;
     }
 
 
@@ -1250,7 +1253,7 @@ sub SetupMemberVar
 ##		  4 => allow delete (wmDELETE)
 ##                8 => allow delete all (wmCLEAR)
 ##		    default = 7
-## !TableFilter = regex which tables should be used
+## !TableFilter = prefix which tables should be used
 ##
 
 
@@ -1261,10 +1264,14 @@ sub SetupObject
 
     my $self = New ($class, $$parm{'!DataSource'}, $$parm{'!Table'}, $$parm{'!Username'}, $$parm{'!Password'}, $$parm{'!DBIAttr'}) or return undef ; 
 
+    $self -> SetupMemberVar ('Debug', $parm, $Debug) ;
     $self -> SetupMemberVar ('Fields', $parm) ;
     $self -> SetupMemberVar ('TabRelation', $parm) ;
     $self -> SetupMemberVar ('TabJoin', $parm) ;
     $self -> SetupMemberVar ('PrimKey', $parm) ;
+    $self -> SetupMemberVar ('Serial', $parm) ;
+    $self -> SetupMemberVar ('Sequence', $parm) ;
+    $self -> SetupMemberVar ('SeqClass', $parm) ;
     $self -> SetupMemberVar ('StoreAll', $parm) ;
     $self -> SetupMemberVar ('Default', $parm) ;
     $self -> SetupMemberVar ('IgnoreEmpty', $parm, 0) ;
@@ -1277,8 +1284,36 @@ sub SetupObject
     $self -> SetupMemberVar ('TableFilter', $parm) ;
     $self -> SetupMemberVar ('DoOnConnect', $parm) ;
 
+
+    if ($self -> {'*Serial'}) 
+        {
+        $self->{'*PrimKey'}     = $self -> {'*Serial'} ;
+        $self->{'*Sequence'}    ||= "$self->{'*Table'}_seq" ;
+    
+        if ($self->{'*SeqClass'})
+            {
+            my @seqparm = split (/\s*,\s*/, $self->{'*SeqClass'}) ;
+
+            my $class = shift @seqparm ;
+            if (!defined (&{"$class\:\:new"}))
+                {
+                my $fn = $class ;
+                $fn =~ s/::/\//g ;
+                $fn .= '.pm' ;
+                require $fn ;
+                }
+            $self->{'*SeqObj'} = $class -> new ($self -> {'*DBHdl'}, @seqparm) ; 
+            }
+        else
+            {                        
+            $self->{'*GetSerialPreInsert'} = DBIx::Compat::GetItem ($self -> {'*Driver'}, 'GetSerialPreInsert')  ;
+            $self->{'*GetSerialPostInsert'} = DBIx::Compat::GetItem ($self -> {'*Driver'}, 'GetSerialPostInsert')  ;
+            }
+        }
+
     $Data{$self->{'*Id'}}   = [] ;
     $self->{'*FetchStart'}  = 0 ;
+    $self->{'*LastSerial'}  = undef ;
     $self->{'*FetchMax'}    = undef ;
     $self->{'*EOD'}         = undef ;
     $self->{'*CurrRow'}     = 0 ;
@@ -1296,6 +1331,7 @@ sub SetupObject
     my $key ;
     my $value ;
     my $conversion ;
+    my $dbg = ($self -> {'*Debug'} > 2) ;
 
     foreach $conversion (($self -> TableAttr ('!Filter'), $$parm{'!Filter'}))  
 	{
@@ -1314,12 +1350,17 @@ sub SetupObject
 			    $name = $names -> [$i] ;
 			    if ($value -> [0] || $ifunc -> {$name}) 
                                 {
+                                local $^W = 0 ;
                                 $ifunc -> {$name} = $value -> [0] ;
+		                print LOG "DB:  Apply input Filter to $name (type=$_)\n" if ($dbg) ;
 		                push @$irfunc_insert, $name if ($value -> [2] & rqINSERT) ;
+		                print LOG "DB:  Apply required INSERT Filter to $name (type=$_)\n" if ($dbg && $value -> [2] & rqINSERT) ;
 		                push @$irfunc_update, $name if ($value -> [2] & rqUPDATE) ;
+		                print LOG "DB:  Apply required UPDATE Filter to $name (type=$_)\n" if ($dbg && $value -> [2] & rqUPDATE) ;
                                 }
 			    $ofunc -> {$name} = $value -> [1] if ($value -> [1] || $ofunc -> {$name}) ;
-			    }
+			    print LOG "DB:  Apply output Filter to $name  (type=$_)\n" if ($dbg && ($value -> [1] || $ofunc -> {$name})) ;
+                            }
 			$i++ ;
 			}
 		    }
@@ -1327,11 +1368,16 @@ sub SetupObject
 		    {    	    
 		    if ($value -> [0] || $ifunc -> {$key}) 
                         {
+                        local $^W = 0 ;
                         $ifunc -> {$key} = $value -> [0] ;
+		        print LOG "DB:  Apply input Filter to $key\n" if ($dbg) ;
 		        push @$irfunc_insert, $key if ($value -> [2] & rqINSERT) ;
+		        print LOG "DB:  Apply required INSERT Filter to $key\n" if ($dbg && $value -> [2] & rqINSERT) ;
 		        push @$irfunc_update, $key if ($value -> [2] & rqUPDATE) ;
+	                print LOG "DB:  Apply required UPDATE Filter to $key\n" if ($dbg && $value -> [2] & rqUPDATE) ;
                         }
     		    $ofunc -> {$key} = $value -> [1] if ($value -> [1] || $ofunc -> {$key}) ;
+		    print LOG "DB:  Apply output Filter to $key\n" if ($dbg && ($value -> [1] || $ofunc -> {$key})) ;
 		    }
 		}
 	    }
@@ -1560,7 +1606,7 @@ sub STORE
 
     $fetch += $self->{'*FetchStart'} ;
     #$max    = $self->{'*FetchMax'} ;
-    print LOG "DB:  STORE \[$fetch\] = $value\n"  if ($self->{'*Debug'} > 3) ;
+    print LOG "DB:  STORE \[$fetch\] = " . (defined ($value)?$value:'<undef>') . "\n"  if ($self->{'*Debug'} > 3) ;
     if ($self->{'*Debug'} > 2 && ref ($value) eq 'HASH')
         {
         my $k ;
@@ -1583,6 +1629,8 @@ sub STORE
         }
     else
         {
+        local $^W = 0 ;
+
         $r = tie %$value, 'DBIx::Recordset::Row', $self, $value ;
         $rec = $Data{$self->{'*Id'}}[$fetch] = $value ;
 	my $dirty = $r->{'*dirty'} ; # preserve dirty state  
@@ -1730,8 +1778,6 @@ sub Names
 
     {
     my $self = shift ;
-    my $sth = $self -> {'*StHdl'} ;
-    return undef if (!$sth) ;
     if ($self -> {'*LinkName'} < 2)
         {
         return $self->{'*SelectFields'} ;
@@ -1901,7 +1947,7 @@ sub Stats
 sub StartRecordNo
 
     {
-    return $_[0] -> {'*FetchStart'} ;
+    return $_[0] -> {'*StartRecordNo'} ;
     }
 
 ## ----------------------------------------------------------------------------
@@ -1915,6 +1961,19 @@ sub LastSQLStatement
 
     {
     return $_[0] -> {'*LastSQLStatement'} ;
+    }
+
+## ----------------------------------------------------------------------------
+##
+## LastSerial
+##
+## return the last value of the field defined with !Serial
+##
+
+sub LastSerial
+
+    {
+    return $_[0] -> {'*LastSerial'} ;
     }
 
 
@@ -2084,6 +2143,7 @@ sub SQLSelect ($;$$$$$$$)
     $self->ReleaseRecords ;
     undef $self->{'*LastKey'} ;
     $self->{'*FetchStart'} = 0 ;
+    $self->{'*StartRecordNo'} = 0 ;
     $self->{'*FetchMax'} = undef ;
     $self->{'*EOD'} = undef ;
     $self->{'*SelectFields'} = undef ;
@@ -2091,6 +2151,8 @@ sub SQLSelect ($;$$$$$$$)
 
     $order  ||= '' ;
     $expr   ||= '' ;
+    $group  ||= '' ;
+    $append ||= '' ;
     $orderby  = $order?'ORDER BY':'' ;
     $groupby  = $group?'GROUP BY':'' ;
     $where    = $expr?'WHERE':'' ;
@@ -2122,10 +2184,12 @@ sub SQLSelect ($;$$$$$$$)
         for (my $i = 0 ; $i < @$bind_values; $i++)
             {
             #print LOG "bind $i  bv=<$bind_values->[$i]>  bvcnv=" . ($Numeric -> {$bind_types -> [$i]}?$bind_values -> [$i]+0:$bind_values -> [$i]) . "  bt=$bind_types->[$i]  n=$Numeric->{$bind_types->[$i]}\n" ;
-            $bind_values -> [$i] += 0 if (defined ($bind_values -> [$i]) && $Numeric -> {$bind_types -> [$i]}) ;
+            $bind_values -> [$i] += 0 if (defined ($bind_values -> [$i]) && defined ($bind_types -> [$i]) && $Numeric -> {$bind_types -> [$i]}) ;
             #my $bti = $bind_types -> [$i]+0 ;
             #$sth -> bind_param ($i+1, $bind_values -> [$i], {TYPE => $bti}) ;
-            $sth -> bind_param ($i+1, $bind_values -> [$i], $bind_types -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef) ;
+            #$sth -> bind_param ($i+1, $bind_values -> [$i], $bind_types -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef) ;
+	    my $bt = $bind_types -> [$i] ;
+            $sth -> bind_param ($i+1, $bind_values -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE => $bt}:undef ) ;
             }
         $rc = $sth -> execute  ;
 	$self->{'*SelectedRows'} = $sth->rows;
@@ -2212,7 +2276,11 @@ sub FETCHSIZE
     die "FETCHSIZE may not supported by your DBD driver, set \$FetchsizeWarn to zero if you are sure it works. Read about \$FetchsizeWarn in the docs!"  if ($FetchsizeWarn == 2) ;
     warn "FETCHSIZE may not supported by your DBD driver, set \$FetchsizeWarn to zero if you are sure it works. Read about \$FetchsizeWarn in the docs!"  if ($FetchsizeWarn == 1) ;
         
-    return $self->{'*SelectedRows'};
+    my $sel = $self->{'*SelectedRows'} ;
+    return $sel if (!defined ($self->{'*FetchMax'})) ;
+
+    my $max = $self->{'*FetchMax'} - $self->{'*FetchStart'} + 1 ;
+    return $max<$sel?$max:$sel ;
     }   
 
 
@@ -2234,7 +2302,7 @@ sub FETCH
 
     $fetch += $self->{'*FetchStart'} ;
 
-    return $self->{'*LastRecord'} if ($fetch == $self->{'*LastRecordFetch'} && $self->{'*LastRecord'}) ; 
+    return $self->{'*LastRecord'} if (defined ($self->{'*LastRecordFetch'}) && $fetch == $self->{'*LastRecordFetch'} && $self->{'*LastRecord'}) ; 
 
     my $max ;
     my $key ;
@@ -2266,7 +2334,7 @@ sub FETCH
 		    {
 		    $self->{'*EOD'} = 1 ;
 		    $sth -> finish ;
-                    print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+                    print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, LastRow = $row, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
                     undef $self->{'*StHdl'} ;
 		    last ;
 		    }
@@ -2329,7 +2397,7 @@ sub FETCH
 			    }
 			}
 
-                    $self->{'*LastKey'} = $dat -> {$self -> {'*PrimKey'}} ;
+                    $self->{'*LastKey'} = $dat -> {$self -> {'*PrimKey'}} if ($self -> {'*PrimKey'}) ;
 		    }
             
                 $data -> [$fetch] = $dat ;
@@ -2354,6 +2422,7 @@ sub FETCH
             $dat = {} ;
             $obj = tie %$dat, 'DBIx::Recordset::Row', $self, $self->{'*SelectFields'} , $arr ;
             $data -> [$fetch] = $dat ;
+	    $self->{'*LastRow'} = $fetch ;
             $self->{'*LastKey'} = $obj -> FETCH ($self -> {'*PrimKey'}) ;
 	    }
 	else
@@ -2376,7 +2445,7 @@ sub FETCH
     $self->{'*LastRecord'} = $dat ;
     $self->{'*LastRecordFetch'} = $fetch ;
 
-    print LOG 'DB:  FETCH return ' . ($dat?$dat:'<undef>') . "\n"  if ($self->{'*Debug'} > 3) ;
+    print LOG 'DB:  FETCH return ' . (defined ($dat)?$dat:'<undef>') . "\n"  if ($self->{'*Debug'} > 3) ;
     return $dat ;
     }
 
@@ -2501,6 +2570,8 @@ sub BuildFields
     my $leftjoin = DBIx::Compat::GetItem ($drv, 'SupportSQLJoin') ;
     my $numtabs = 99 ;
     
+    local $^W = 0 ;
+
     $numtabs = 2 if (DBIx::Compat::GetItem ($drv, 'SQLJoinOnly2Tabs')) ;
 
 
@@ -2556,7 +2627,7 @@ sub BuildFields
         next if (!($link = $self -> Link ($linkname))) ;
             # does not work with another Datasource or with an link to the table itself
         next if ($link -> {'!DataSource'} || $link -> {'!Table'} eq $self -> {'!Table'}) ; 
-        
+
         $nf = $link->{'!NameField'} || $self -> TableAttr ('!NameField', undef, $link->{'!Table'}) ;
 
         if (!$link -> {'!LinkedBy'} && $nf)
@@ -2675,7 +2746,7 @@ sub BuildFields
 sub BuildWhere ($$$$)
 
     {
-    my ($self, $where, $bind_values, $bind_types) = @_ ;
+    my ($self, $where, $xbind_values, $bind_types) = @_ ;
     
     
     my $expr = '' ;
@@ -2688,7 +2759,7 @@ sub BuildWhere ($$$$)
     my $tab4f        = $self->{'*Table4Field'} ;
     my $type4f       = $self->{'*Type4Field'} ;
     my $ifunc        = $self->{'*InputFunctions'} ;
-	
+    my $bind_values  = ref ($xbind_values) eq 'ARRAY'?$xbind_values:$$xbind_values ;
     
     if (!ref($where))
         { # We have the where as string
@@ -2698,10 +2769,22 @@ sub BuildWhere ($$$$)
     elsif (exists $where -> {'$where'})
         { # We have the where as string
         $expr = $where -> {'$where'} ;
+        if (exists $where -> {'$values'})
+            {
+            if (ref ($xbind_values) eq 'ARRAY')
+                {
+                push @$xbind_values, @{$where -> {'$values'}} ;
+                }
+            else
+                {
+                $$xbind_values = $where -> {'$values'} ;
+                }
+            }
         if ($Debug > 2) { print LOG "DB:  Literal where -> $expr\n" ; }
         }
     elsif (defined ($primkey = $self->{'*PrimKey'}) && defined ($where -> {$primkey}) && 
-           (!defined ($where -> {"\*$primkey"}) || $where -> {"\*$primkey"} eq '='))
+           (!defined ($where -> {"\*$primkey"}) || $where -> {"\*$primkey"} eq '=') &&
+           !ref ($where -> {$primkey}))
         { # simplify where when ask for <primkey> = ?
         my $oper = $$where{"\*$primkey"} || '=' ;
 
@@ -2753,9 +2836,9 @@ sub BuildWhere ($$$$)
             my @multval ;
             
             $type  = substr ($key, 0, 1) || ' ' ;
-            $val = undef if ($ignore > 1 && $val eq '') ;
+            $val = undef if ($ignore > 1 && defined ($val) && $val eq '') ;
 
-            if ($Debug > 2) { print LOG "DB:  SelectWhere <$key>=<$val> type = $type\n" ; }
+            if ($Debug > 2) { print LOG "DB:  SelectWhere <$key>=<" . (defined ($val)?$val:'<undef>') ."> type = $type\n" ; }
 
             if (($type =~ /^(\w|\\|\+|\'|\#|\s)$/) && !($ignore && !defined ($val)))
                 {
@@ -2816,6 +2899,10 @@ sub BuildWhere ($$$$)
                 else
                     { # single field
                     $multcnt = 0 ;
+                    # any input conversion ?
+		    my $if  = $ifunc -> {$PreserveCase?$key:lc ($key)} ; 
+		    $val = &{$if} ($val) if ($if) ;
+
                     if ($type eq '\\' || $type eq '#' || $type eq "'")
                         { # remove leading backslash, # or '
                         $key = substr ($key, 1) ;
@@ -2833,9 +2920,6 @@ sub BuildWhere ($$$$)
                         $$Quote{$lkey} = 0 ;
                         }
 
-                    # any input conversion ?
-		    my $if  = $ifunc -> {$lkey} ; 
-		    $val = &{$if} ($val) if ($if) ;
 		    
 		    {
 		    local $^W = 0 ; # avoid warnings
@@ -2885,7 +2969,12 @@ sub BuildWhere ($$$$)
                 elsif ($val eq '')
                     { @mvals = ('') }
                 else
-                    { @mvals = split (/$mvalsplit/, $val) ; }
+                    { 
+                    if (ref ($val) eq 'ARRAY')
+                        { @mvals = @$val ; }
+                    else
+                        { @mvals = split (/$mvalsplit/, $val) ; }
+                    }
                 $vexp  = '' ;
                 $vconj = '' ;
                 my $i ;
@@ -2899,7 +2988,7 @@ sub BuildWhere ($$$$)
                     $vconj ||= $$where{'$valueconj'} || ' or ' ; 
                     }                
 
-                if ($Debug > 3) { print LOG "DB:  Key $key gives $vexp bind_values = <@$bind_values> bind_types=<@$bind_types>\n" ; }
+                if ($Debug > 3) { local $^W = 0 ; print LOG "DB:  Key $key gives $vexp bind_values = <@$bind_values> bind_types=<@$bind_types>\n" ; }
             
                 $expr = "$expr $econj ($vexp)" ;
             
@@ -2945,7 +3034,7 @@ sub Dirty
     
     foreach my $rowdata (@$data) 
         {
-        print LOG "DIRTY: rowref $rowdata\n" if $self->{'*Debug'} > 4;
+        print LOG "DIRTY: rowref " . (defined ($rowdata)?$rowdata:'<undef>') . "\n" if $self->{'*Debug'} > 4;
         next unless ((ref($rowdata) eq 'HASH')
                       and eval { tied(%$rowdata)->isa('DBIx::Recordset::Row') } );
         return 1 if tied(%$rowdata)->Dirty ;
@@ -3054,7 +3143,31 @@ sub Insert ($\%)
     my $Quote = $self->{'*Quote'} ;
     my $ifunc = $self->{'*InputFunctions'} ;
     my $irfunc = $self->{'*InputFunctionsRequiredOnInsert'} ;
-        
+
+    if ($self -> {'*GetSerialPreInsert'})
+        {
+        my $val = $data -> {$self -> {'*Serial'}} ;
+        $val = $$val if (ref ($val) eq 'SCALAR') ;
+        if (!defined ($val)) 
+            { 
+            $data -> {$self -> {'*Serial'}} = &{$self -> {'*GetSerialPreInsert'}} ($self -> {'*DBHdl'},
+                                                                           $self -> {'*Table'}, 
+                                                                           $self -> {'*Sequence'}) 
+            }
+        $self -> {'*LastSerial'} = $data -> {$self -> {'*Serial'}} ;
+        }
+    elsif ($self -> {'*SeqObj'})
+        {
+        my $val = $data -> {$self -> {'*Serial'}} ;
+        $val = $$val if (ref ($val) eq 'SCALAR') ;
+        if (!defined ($val)) 
+            { 
+            $data -> {$self -> {'*Serial'}} = $self -> {'*SeqObj'} -> NextVal ($self -> {'*Sequence'}) ;
+            }
+        $self -> {'*LastSerial'} = $data -> {$self -> {'*Serial'}} ;
+        }
+
+
     while (($key, $val) = each (%$data))
         {
         $val = $$val if (ref ($val) eq 'SCALAR') ;
@@ -3107,8 +3220,16 @@ sub Insert ($\%)
         my $keystr = join (',', @keys) ;
 
         $rc = $self->SQLInsert ($keystr, $valstr, \@bind_values, \@bind_types) ;
+
+        $self -> {'*LastSerial'} = &{$self -> {'*GetSerialPostInsert'}} ($self -> {'*DBHdl'},
+                                                                           $self -> {'*Table'}, 
+                                                                           $self -> {'*Sequence'}) if ($self -> {'*GetSerialPostInsert'}) ; 
+
         }
-    
+    else
+        {
+        $self -> {'*LastSerial'} = undef ;
+        }                
 
     return $newself?*newself:$rc ;
     }
@@ -3147,6 +3268,7 @@ sub Update ($\%$)
     my $Quote = $self->{'*Quote'} ;
     my $ifunc = $self->{'*InputFunctions'} ;
     my $irfunc = $self->{'*InputFunctionsRequiredOnUpdate'} ;
+    my $dbg = $self -> {'*Debug'} > 2 ;
         
     if ($irfunc)
         {
@@ -3169,12 +3291,12 @@ sub Update ($\%$)
 	    }
 	else
 	    {
-	    $primkey = undef ;
+	    $primkey = '' ;
 	    }
 	}
     else
 	{
-	$primkey = undef ;
+	$primkey = '' ;
 	}
 
     #print LOG "2 primkey = $primkey d=$data->{$primkey} w=" . ($where?$where->{$primkey}:'<undef>') . " v=$val\n" ;
@@ -3186,6 +3308,7 @@ sub Update ($\%$)
         $val = $$val if (ref ($val) eq 'SCALAR') ;
         # any input conversion ?
         my $if = $ifunc -> {$key} ;
+        print LOG "DB:  UPDATE: $key = " . (defined ($val)?$val:'<undef>') . " " . ($if?"input filter = $if":'') . "\n" if ($dbg) ;
        $val = &{$if} ($val, 'update', $data, $where) if ($if) ;
        if ($key =~ /^\\(.*?)$/)
             {
@@ -3314,11 +3437,11 @@ sub Select (;$$$$$)
         ($self = $newself) or return undef ;
         }
 
-    my @bind_values ;
+    my $bind_values = [] ;
     my @bind_types ;
-    my $expr = $self->BuildWhere ($where, \@bind_values, \@bind_types) ;
+    my $expr = $self->BuildWhere ($where, \$bind_values, \@bind_types) ;
 
-    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $self->{'*Order'} || $order, $group, $append, \@bind_values, \@bind_types) ;
+    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $self->{'*Order'} || $order, $group, $append, $bind_values, \@bind_types) ;
     return $newself?*newself:$rc ;
     }
 
@@ -3375,8 +3498,9 @@ sub Search ($\%)
         if ($start < 0) { $start = 0 ; }
 	}
 
+    my $startrecno = $start ;
     my $append = '' ;
-    if (defined ($max))
+    if (defined ($max) && !$$fdat{'$last'})
         {
         my $LimitOffset = DBIx::Compat::GetItem ($self->{'*Driver'}, 'LimitOffset')  ;
         if ($LimitOffset) 
@@ -3386,17 +3510,23 @@ sub Search ($\%)
             }
         }
 
-    my $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, "$$fdat{'$append'} $append") ; 
+    my $rc ;
     
+    {
+    local $^W = 0 ;
+    $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, "$$fdat{'$append'} $append") ; 
+    }
+
     if ($rc && $$fdat{'$last'})
 	{ # read all until last row
 	my $storeall = $self->{'*StoreAll'} ;
 	$self->{'*StoreAll'} = 1 ;
 	$self -> FETCH (0x7ffffff) ;
-	$start = $self->{'*LastRow'} - ($max || 1) ;
+	$startrecno = $start = $self->{'*LastRow'} - ($max || 1) ;
 	$self->{'*StoreAll'} = $storeall ;
 	}
 
+    $self->{'*StartRecordNo'} = $startrecno ;
     $self->{'*FetchStart'} = $start ;
     $self->{'*FetchMax'}   = $start + $max - 1 if (defined ($max)) ;
 
@@ -3447,9 +3577,19 @@ sub Execute ($\%)
         }
     else
         {
+        my $serial ;
         #$rc = $self -> UpdateInsert ($fdat) if (defined ($$fdat{'=update'}) && defined ($$fdat{'=insert'}) && !defined($rc)) ;
         $rc = $self -> Update ($fdat) if (defined ($$fdat{'=update'}) && $rc eq  '-') ;
-        $rc = $self -> Insert ($fdat) if (defined ($$fdat{'=insert'}) && $rc eq  '-') ;
+        if (defined ($$fdat{'=insert'}) && $rc eq  '-') 
+             {
+             $rc = $self -> Insert ($fdat) ;
+             if (defined ($rc) && $self -> {'*LastSerial'}) 
+                {
+                $serial = $self -> {'*LastSerial'} ;
+                $rc = $self -> Search ({$self->{'*Serial'} => $serial}) ;
+                return $newself?*newself:$rc ;
+                }
+             }
         $rc = $self -> Delete ($fdat) if (defined ($$fdat{'=delete'}) && $rc eq  '-') ;
         $rc = $self -> Search ($fdat) if (!defined ($$fdat{'=empty'}) && defined ($rc)) ;
         $rc = 1 if (defined ($$fdat{'=empty'}) && $rc eq  '-') ;
@@ -3551,7 +3691,7 @@ sub PrevNextForm
   
   
     my $more  = $self -> MoreRecords (1) ;
-    my $start = $self -> {'*FetchStart'} ;
+    my $start = $self -> {'*StartRecordNo'} ;
     my $max   = $self -> {'*FetchMax'} - $self -> {'*FetchStart'} + 1 ;
 
     
@@ -3862,7 +4002,7 @@ sub FETCH
         $h = $rs -> Curr ;
         }
 
-    print DBIx::Recordset::LOG "DB:  Hash::FETCH return " . defined ($h)?$h:'<undef>' . "\n" if ($rs->{'*Debug'} > 3) ;
+    print DBIx::Recordset::LOG "DB:  Hash::FETCH return " . (defined ($h)?$h:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
     
     return $h ;
     }
@@ -3881,7 +4021,7 @@ sub STORE
     my ($self, $key, $value) = @_ ;
     my $rs    = $self -> {'*Recordset'} ;  
 
-    print DBIx::Recordset::LOG "DB:  ::Hash::STORE \{$key\} = $value\n" if ($rs->{'*Debug'} > 3) ;
+    print DBIx::Recordset::LOG "DB:  ::Hash::STORE \{" . (defined ($key)?$key:'<undef>') . "\} = " . (defined ($value)?$value:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
 
     croak "Hash::STORE need hashref as value" if (!ref ($value) eq 'HASH') ;
 
@@ -4123,6 +4263,9 @@ sub STORE
     my ($self, $key, $value)  = @_ ;
     my $rs  = $self -> {'*Recordset'} ;  
     my $dat = $self -> {'*data'} ;
+    
+    local $^W = 0 ;
+
     print DBIx::Recordset::LOG "DB:  Row::STORE $key = $value\n" if ($rs->{'*Debug'} > 3) ;
     # any changes?
     if ($dat -> {$key} ne $value || defined ($dat -> {$key}) != defined($value))
@@ -4173,14 +4316,13 @@ sub FETCH
             $setup -> {'!DataSource'} = $rs if (!defined ($link -> {'!DataSource'})) ;
             $data = $self -> {'*data'}{$key} = DBIx::Recordset -> Search ($setup) ;
             #delete $link -> {'!Recordset'} if (ref ($link -> {'!DataSource'})) ; # avoid backlinks
-            print DBIx::Recordset::LOG "DB:  Row::FETCH $key = Setup New Recordset for table $link->{'!Table'}, $lf= <$mv>\n" if ($rs->{'*Debug'} > 3) ;
+            print DBIx::Recordset::LOG "DB:  Row::FETCH $key = Setup New Recordset for table $link->{'!Table'}, $lf = " . (defined ($mv)?$mv:'<undef>') . "\n" if ($rs->{'*Debug'} > 3) ;
 	    my $of = $rs -> {'*OutputFunctions'}{$key} ;
-	    return &{$of}($data) if ($of) ;	    
-            return $data ;
+	    $data = &{$of}($data) if ($of) ;	    
             }
         }
 
-    print DBIx::Recordset::LOG "DB:  Row::FETCH $key = <" . $data . ">\n" if ($rs->{'*Debug'} > 3) ;
+    if ($rs && $rs->{'*Debug'} > 3) { local $^W=0;print DBIx::Recordset::LOG "DB:  Row::FETCH " . (defined ($key)?$key:'<undef>') . " = <" . (defined ($data)?$data:'<undef>') . ">\n" } ;
     
     return $data ;
     }
@@ -4277,7 +4419,7 @@ sub Flush
             if ($rc != 1 && $rc ne '')
                 { # must excatly be one row!
                 print DBIx::Recordset::LOG "DB:  ERROR: Row Update has updated $rc rows instead of one ($rs->{'*LastSQLStatement'})\n" if ($rs->{'*Debug'}) ;
-                $rs -> savecroak ("DB:  ERROR: Row Update has updated $rc rows instead of one ($rs->{'*LastSQLStatement'})") ;            
+                #$rs -> savecroak ("DB:  ERROR: Row Update has updated $rc rows instead of one ($rs->{'*LastSQLStatement'})") ;            
                 }	      
             }
         
@@ -4296,10 +4438,12 @@ sub Flush
     foreach $k (keys %{$rs -> {'*Links'}})
         { # Flush linked tables
         
-        $lrs = $self->{'*data'}{$k} ;
-        $rname = '' ;
-        $rname = eval {ref ($$lrs)} ;
-        ${$lrs} -> Flush () if ($rname eq 'DBIx::Recordset') ; #if (defined ($lrs) && ref ($lrs) && defined ($$lrs) && ) ;
+        if ($lrs = $self->{'*data'}{$k})
+            {
+            $rname = '' ;
+            $rname = eval {ref ($$lrs)} || '' ;
+            ${$lrs} -> Flush () if ($rname eq 'DBIx::Recordset') ; #if (defined ($lrs) && ref ($lrs) && defined ($$lrs) && ) ;
+            }
         }
 
     return 1 ;
@@ -4350,23 +4494,54 @@ DBIx::Recordset - Perl extension for DBI recordsets
 
 =head1 SYNOPSIS
 
-  use DBIx::Recordset;
+ use DBIx::Recordset;
+
+ # Setup a new object and select some recods...
+ *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:Oracle:....',
+                                    '!Table'      => 'users',
+                                    '$where'      => 'name = ? and age > ?',
+                                    '$values'     => ['richter', 25] }) ;
+
+ # Get the values of field foo ...
+ print "First Records value of foo is $set[0]{foo}\n" ;
+ print "Second Records value of foo is $set[1]{foo}\n" ;
+ # Get the value of the field age of the current record ...
+ print "Age is $set{age}\n" ;
+
+ # Do another select with the already created object...
+ $set -> Search ({name => 'bar'}) ;
+
+ # Show the result...
+ print "All users with name bar:\n" ;
+ while ($rec = $set -> Next)
+    {
+    print $rec -> {age} ;
+    }
+
+ # Setup another object and insert a new record
+ *set2 = DBIx::Recordset -> Insert ({'!DataSource' => 'dbi:Oracle:....',
+                                     '!Table'      => 'users',
+                                     'name'        => 'foo',
+                                     'age'         => 25 }) ;
+ 
+ 
+ # Update this record (change age from 25 to 99)...
+ $set -> Update ({age => 99}, {name => 'foo'}) ; 
 
 
 =head1 DESCRIPTION
 
-B<DBIx::Recordset> is a Perl module, which should make it easier to access a set
-of records in a database.
-It should make standard database access (select/insert/update/delete)
-easier to handle (e.g. web applications or scripts to enter/retrieve
-data to/from a database). Special attention is made for web applications to make
-it possible to handle state-less access and to process the posted data
-of formfields.
-The programmer only has to supply the absolutely necessary information, the
-rest is done by DBIx::Recordset.
+DBIx::Recordset is a perl module for abstraction and simplification of
+database access.
+
+The goal is to make standard database access (select/insert/update/delete)
+easier to handle and independend of the underlying DBMS. Special attention is
+made on web applications to make it possible to handle the state-less access
+and to process the posted data of formfields, but DBIx::Recordset is not
+limited to web applications.
 
 B<DBIx::Recordset> uses the DBI API to access the database, so it should work with
-every database for which a DBD driver is available (see also DBIx::Compat)
+every database for which a DBD driver is available (see also DBIx::Compat).
 
 Most public functions take a hash reference as parameter, which makes it simple
 to supply various different arguments to the same function. The parameter hash
@@ -4401,9 +4576,9 @@ description of the valid arguments first.
 All parameters starting with an '!' are only recognized at setup time.
 If you specify them in later function calls they will be ignored.
 You can also preset these parameters with the TableAttr method of 
-DBIx::Database, this gives you the chance to presetup most parameters
-for the whole database and they will be use everytime you create a new
-DBIx::Recordset object, without spedifing it everytime.
+DBIx::Database.  This allows you to presetup most parameters
+for the whole database and they will be use every time you create a new
+DBIx::Recordset object, without specifing it every time.
 
 =item B<!DataSource>
 
@@ -4437,7 +4612,7 @@ Uses given database handle.
 
 =item B<!Table>
 
-Tablename, multiple tables are comma-separated.
+Tablename. Multiple tables are comma-separated.
 
 =item B<!Username>
 
@@ -4456,37 +4631,39 @@ function. See perldoc DBI for a detailed description.
 
 Fields which should be returned by a query. If you have specified multiple
 tables the fieldnames should be unique. If the names are not unique you must
-specify them among with the tablename (e.g. tab1.field).
+specify them along with the tablename (e.g. tab1.field).
 
 
 NOTE 1: Fieldnames specified with !Fields can't be overridden. If you plan
 to use other fields with this object later, use $Fields instead.
 
-NOTE 2: The keys for the returned hash normaly doesn't have a table part, only the fieldname
-part forms the key. (see !LongNames for an execption)
+NOTE 2: The keys for the returned hash normally don't have a table part.
+Only the fieldname part forms the key. (See !LongNames for an exception.)
 
 NOTE 3: Because the query result is returned in a hash, there can only be
 one out of multiple fields with the same name fetched at once.
 If you specify multiple fields with the same name, only one is returned
 from a query. Which one this actually is depends on the DBD driver.
-(see !LongNames for an execption)
+(See !LongNames for an exception.)
 
 NOTE 4: Some databases (e.g. mSQL) require you to always qualify a fieldname
 with a tablename if more than one table is accessed in one query.
 
 =item B<!TableFilter>
 
-The TableFilter parameter specifies which tables should be honoured when DBIx::Recordset
-searchs for links between tables (see below). When given as parameter to DBIx::Database
-it filters for which tables DBIx::Database retrieves metadata. Also the DBIx::Recordset
-link detection tries to use this values as an prefix of table names, so you can leave out
-this prefix, when you write a fieldname that should be detected as a link to another table.
-
+The TableFilter parameter specifies which tables should be honoured
+when DBIx::Recordset searches for links between tables (see
+below). When given as parameter to DBIx::Database it filters for which
+tables DBIx::Database retrieves metadata. Only thoses tables are used
+which starts with prefix given by C<!TableFilter>. Also the DBIx::Recordset
+link detection tries to use this value as a prefix of table names, so
+you can leave out this prefix when you write a fieldname that should
+be detected as a link to another table.
 
 =item B<!LongNames>
 
-When set to 1 the keys of the hash which is returned for each record not only
-consits of the fieldname, but are build in the form table.field.
+When set to 1, the keys of the hash returned for each record not only
+consist of the fieldnames, but are built in the form table.field.
 
 =item B<!Order>
 
@@ -4501,8 +4678,8 @@ to use other fields with this object later, use $order instead.
 
 =item B<!TabRelation>
 
-Condition which describes the relation between the given tables.
-(e.g. tab1.id = tab2.id) (See also L<!TabJoin>)
+Condition which describes the relation between the given tables
+(e.g. tab1.id = tab2.id) (See also L<!TabJoin>.)
 
   Example
 
@@ -4517,8 +4694,8 @@ Condition which describes the relation between the given tables.
 
 =item B<!TabJoin>
 
-!TabJoin gives you the possibilty to specify an B<INNER/RIGHT/LEFT JOIN> which is
-used in a B<SELECT> statement. (See also L<!TabRelation>)
+!TabJoin allows you to specify an B<INNER/RIGHT/LEFT JOIN> which is
+used in a B<SELECT> statement. (See also L<!TabRelation>.)
 
   Example
 
@@ -4535,17 +4712,42 @@ used in a B<SELECT> statement. (See also L<!TabRelation>)
 
 =item B<!PrimKey>
 
-Name of primary key. When this key appears in a where parameter list
+Name of the primary key. When this key appears in a WHERE parameter list
 (see below), DBIx::Recordset will ignore all other keys in the list,
 speeding up WHERE expression preparation and execution. Note that this
 key does NOT have to correspond to a field tagged as PRIMARY KEY in a
 CREATE TABLE statement.
 
+=item B<!Serial>
+
+Name of the primary key. In contrast to C<!PrimKey> this field is treated
+as an autoincrement field. If the database does not support autoincrement fields,
+but sequences the field is set to the next value of a sequence (see C<!Sequence> and C<!SeqClass>)
+upon each insert. If a C<!SeqClass> is given the values are always retrived from the sequence class
+regardless if the DBMS supports autoincrement or not.
+The value from this field from the last insert could be retrieved
+by the function C<LastSerial>.
+
+=item C<!Sequence>
+
+Name of the sequence to use for this table when inserting a new record and
+C<!Serial> is defind. Defaults to <tablename>_seq.
+
+=item C<!SeqClass>
+
+Name and Parameter for a class that can generate unique sequence values. This is
+a string that holds comma separated values. The first value is the class name and
+the following parameters are given to the new constructor. See also I<DBIx::Recordset::FileSeq>
+and I<DBIx::Recordset::DBSeq>. 
+
+Example:  '!SeqClass' => 'DBIx::Recordset::FileSeq, /tmp/seq'
+
+
 =item B<!WriteMode>
 
 !WriteMode specifies which write operations to the database are allowed and which are
 disabled. You may want to set !WriteMode to zero if you only need to query data, to
-avoid accidently changeing the content of the database.
+avoid accidentally changing the content of the database.
 
 B<NOTE:> The !WriteMode only works for the DBIx::Recordset methods. If you
 disable !WriteMode, it is still possible to use B<do> to send normal
@@ -4575,7 +4777,7 @@ Allow DELETE
 
 To allow DELETE for the whole table, wmDELETE must be also specified. This is 
 necessary for assigning a hash to a hash which is tied to a table. (Perl will 
-first erase the whole table, then insert the new data)
+first erase the whole table, then insert the new data.)
 
 =item DBIx::Recordset::wmALL (15)
 
@@ -4598,12 +4800,12 @@ see also B<DATA ACCESS> below.
 
 =item B<!HashAsRowKey>
 
-By default, the hash which is returned by the setup function is tied to the
+By default, the hash returned by the setup function is tied to the
 current record. You can use it to access the fields of the current
 record. If you set this parameter to true, the hash will by tied to the whole
 database. This means that the key of the hash will be used as the primary key in
 the table to select one row. (This parameter only has an effect on functions
-which return a typglob).
+which return a typglob.)
 
 =item B<!IgnoreEmpty>
 
@@ -4615,7 +4817,7 @@ script, because browsers send empty formfields as empty strings.
 
 =item B<0 (default)>
 
-An undefined value is treated as SQL B<NULL>: an empty strings remains an empty 
+An undefined value is treated as SQL B<NULL>: an empty string remains an empty 
 string.
 
 =item B<1>
@@ -4634,14 +4836,15 @@ B<NOTE:> The default for versions before 0.18 was 2.
 =item B<!Filter>
 
 Filters can be used to pre/post-process the data which is read from/written to the database.
-The !Filter parameter takes an hash reference which contains the filter fucntions. If the key
-is numeric, it is treaded as a type value and the filter is applied to all fields of that 
-type. If the key if alphanumeric, the filter applies to the named field. Every filter 
-description consistst of an array with at least two elements, the first element must contain the input
-function and the second element must contain the output function. Either may be undef, if only
-one of them are neccessary. The data is passed to the input function before it is written to the
+The !Filter parameter takes a hash reference which contains the filter functions. If the key
+is numeric, it is treated as a type value and the filter is applied to all fields of that 
+type. If the key if alphanumeric, the filter is applied to the named field.  Every filter 
+description consists of an array with at least two elements.  The first element must contain the input
+function, and the second element must contain the output function. Either may be undef, if only
+one of them are necessary. The data is passed to the input function before it is written to the
 database. The input function must return the value in the correct format for the database. The output
-function get the data passed which is read from the database before it is return to the user.
+function is applied to data read from the database before it is returned
+to the user.
  
  
  Example:
@@ -4662,19 +4865,20 @@ function get the data passed which is read from the database before it is return
 
 	}
 
-Both filters converts a date in the format dd.mm.yy to the database format 19yymmdd and
+Both filters convert a date in the format dd.mm.yy to the database format 19yymmdd and
 vice versa. The first one does this for all fields of the type SQL_DATE, the second one
 does this for the fields with the name datefield.
 
 The B<!Filter> parameter can also be passed to the function B<TableAttr> of the B<DBIx::Database>
-object. In this case it applies to all DBIx::Recordset objects, which use this tables.
+object. In this case it applies to all DBIx::Recordset objects which use
+these tables.
 
-Optional an thrid parameter can be specified. It could be set to C<DBIx::Recordset::rqInsert> or
-C<DBIx::Recordset::rqUpdate> or the sum of both. If set, the InputFunction (which is call during
+A third parameter can be optionally specified. It could be set to C<DBIx::Recordset::rqINSERT>,
+C<DBIx::Recordset::rqUPDATE>, or the sum of both. If set, the InputFunction (which is called during
 UPDATE or INSERT) is always called for this field in updates and/or inserts depending on the value.
 If there is no data specified for this field
-as argument to an function which causes an update/insert, the InputFunction is call with an
-argument of B<undef>.
+as an argument to a function which causes an UPDATE/INSERT, the InputFunction
+is called with an argument of B<undef>.
 
 During UPDATE and INSERT the input function gets either the string 'insert' or 'update' passed as
 second parameter.
@@ -4743,7 +4947,7 @@ If omitted, it is set to the same value as B<!MainField>.
 
 This specifies the field or fields which will be used as a "name" for the destination table. 
 It may be a string or a reference to an array of strings.
-For example, if you link to an address table, you may specfiy the field "nickname" as the 
+For example, if you link to an address table, you may specify the field "nickname" as the 
 name field
 for that table, or you may use ['name', 'street', 'city'].
 
@@ -4754,30 +4958,64 @@ Look at B<!LinkName> for more information.
 
 You can give an SQL Statement (or an array reference of SQL statements), that will be
 executed every time, just after an connect to the db. As third possibilty you can give an
-hash reference. After every successfull connect, DBIx::Recordset excutes the statements, in
+hash reference. After every successful connect, DBIx::Recordset excutes the statements, in
 the element which corresponds to the name of the driver. '*' is executed for all drivers. 
 
 =item B<!Default>
 
-Specifies default values for new rows that are insert via hash or array access. The Insert
+Specifies default values for new rows that are inserted via hash or array access. The Insert
 method ignores this parameter.
 
 =item B<!TieRow>
 
 Setting this parameter to zero will cause DBIx::Recordset to B<not> tie the returned rows to
-an DBIx::Recordset::Row object and instead returns an simple hash. The benefit of this is,
+an DBIx::Recordset::Row object and instead returns an simple hash. The benefit of this is
 that it will speed up things, but you aren't able to write to such an row, nor can you use
-the link feature with such an row.
+the link feature with such a row.
 
+=item B<!Debug>
+
+Set the debug level. See DEBUGGING.
 
 
 =head2 Where Parameters
 
 The following parameters are used to build an SQL WHERE expression
 
+=item B<$where>
+
+Give an SQL WHERE expression literaly. If C<$where> is specified, all
+other where parameters described below are ignored. The only expection
+is C<$values> which can be used to give the values to bind to the
+placeholders in C<$where>
+
+=item B<$values>
+
+Values which should be bound to the placeholders given in C<$where>.
+
+ Example:
+
+ *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:Oracle:....',
+                                    '!Table'      => 'users',
+                                    '$where'      => 'name = ? and age > ?',
+                                    '$values'     => ['richter', 25] }) ;
+ 
+
+B<NOTE:> Filters defined with C<!Filter> are B<not> applied to these values, 
+because DBIx::Recordset has no chance to know with values belongs to
+which field.
+
+
 =item B<{fieldname}>
 
 Value for field. The value will be quoted automatically, if necessary.
+The value can also be an array ref in which case the values are put
+together with the operator passed via B<$valueconj> (default: or)
+
+  Example:
+
+  'name' => [ 'mouse', 'cat'] will expand to name='mouse' or name='cat'
+
 
 =item B<'{fieldname}>
 
@@ -4792,7 +5030,7 @@ DBIx::Recordset cannot determine the correct type for a field.
 
 =item B<\{fieldname}>
 
-Value for field. The value will not be converted in any way i.e. you have to
+Value for field. The value will not be converted in any way, i.e. you have to
 quote it before supplying it to DBIx::Recordset if necessary.
 
 =item B<+{fieldname}|{fieldname}..>
@@ -4815,6 +5053,9 @@ with B<$valueconj>. By default, only one of the values must match the field.
 
  Example:
  'name' => "mouse\tcat" will expand to name='mouse' or name='cat'
+
+ NOTE: The above example can also be written as 'name' => [ 'mouse', 'cat']
+
 
 =item B<$valueconj>
 
@@ -4840,7 +5081,7 @@ Operator for the named field
 =item B<$start>
 
 First row to fetch. The row specified here will appear as index 0 in
-the data array
+the data array.
 
 =item B<$max>
 
@@ -4866,7 +5107,7 @@ USING)
 =item B<$group>
 
 Fieldname(s) for grouping (GROUP BY) (must be comma-separated, could also contain 
-HAVING)
+HAVING).
 
 =item B<$append>
 
@@ -4882,14 +5123,15 @@ specify them along with the tablename (e.g. tab1.field).
 NOTE 1: If B<!fields> is supplied at setup time, this can not be overridden
 by $fields.
 
-NOTE 2: The keys for the returned hash normaly doesn't have a table part, only the fieldname
-part forms the key. (see !LongNames for an execption)
+NOTE 2: The keys for the returned hash normally don't have a table part.
+Only the fieldname
+part forms the key. (See !LongNames for an exception.)
 
 NOTE 3: Because the query result is returned in a hash, there can only be
 one out of multiple fields  with the same name fetched at once.
 If you specify multiple fields with same name, only one is returned
 from a query. Which one this actually is, depends on the DBD driver.
-(see !LongNames for an execption)
+(See !LongNames for an exception.)
 
 =item B<$primkey>
 
@@ -4904,7 +5146,7 @@ See also B<!primkey>
 
 =head2 Execute parameters
 
-The following parameters specify which action is to be executed
+The following parameters specify which action is to be executed:
 
 =item B<=search>
 
@@ -4980,7 +5222,7 @@ B<params:> setup
 
 Ties a hash to a recordset object. The hash can be used to access the fields
 of the current record of the recordset object.
-(see Data access below for more details)
+(See Data access below for more details.)
 
 The first form ties the hash to an already existing object, the second one
 sets up a new object.
@@ -4994,7 +5236,7 @@ B<params:> setup
 
 =item B<$set -E<gt> Select ($where, $fields, $order)>
 
-Selects records from the recordsets table(s)
+Selects records from the recordsets table(s).
 
 The first syntax setups a new DBIx::Recordset object and does the select.
 
@@ -5046,9 +5288,10 @@ B<params:> setup (only syntax 1), fields
 Updates one or more records in the recordset table(s). Parameters should contain
 one entry for every field you want to update. The $where contains the SQL WHERE
 condition as a string or as a reference to a hash. If $where is omitted, the
-where conditions are buily from the parameters.
+where conditions are buily from the parameters. If !PrimKey is given for the
+table, only that !PrimKey is used for the WHERE clause.
 
-Fieldnames maybe prefixed with a '\' in which case they are not processed (quoted)
+Fieldnames may be prefixed with a '\', in which case they are not processed (quoted)
 in any way.
 
 
@@ -5060,7 +5303,7 @@ B<params:> setup (only syntax 1+2), where (only if $where is omitted), fields
 
 =item B<$set -E<gt> Delete (\%params)>
 
-Deletes one or more records from the recordsets table(s)
+Deletes one or more records from the recordsets table(s).
 
 B<params:> setup (only syntax 1), where
 
@@ -5078,6 +5321,9 @@ If multiple execute parameters are specified, the priority is
  =empty
 
 If none of the above parameters are specified, a search is performed.
+A search is always performed.  On an C<=update>, the C<!PrimKey>, if given, is looked upon
+and used for the where part of the SQL statement, while all other parameters
+are updated.
 
 
 B<params:> setup (only syntax 1), execute, where, search, fields
@@ -5147,7 +5393,7 @@ is located.
   $set -> Flush () ;
 
 Add will also set the current record to the newly created empty
-record. So you can assign the data by simply using the current record.
+record. So, you can assign the data by simply using the current record.
 
   # Add an empty record
   $set -> Add () ;
@@ -5184,7 +5430,7 @@ first, previous, next, last and goto buttons. Example:
                         -next  => 'Next>>', -last => 'Last',
                         -goto  => 'Goto #'}, \%fdat)
 
-The goto button let's you jump to an random record number. If you obmit any
+The goto button lets you jump to an random record number. If you obmit any
 of the parameters, the corresponding button will not be shown.
 
 
@@ -5199,14 +5445,14 @@ really written to the db.
 
 =item $set -> Dirty ()
 
-Returns true if there is at least one dirty row, that contains unflushed data.
+Returns true if there is at least one dirty row containing unflushed data.
 
 
 
 =item B<DBIx::Recordset::Undef ($name)>
 
-Undef takes the name of a typglob and will destroy the array, the hash
-and the object. All unwritten data is  written to the db, all
+Undef takes the name of a typglob and will destroy the array, the hash,
+and the object. All unwritten data is  written to the db.  All
 db connections are closed and all memory is freed.
 
   Example:
@@ -5217,18 +5463,18 @@ db connections are closed and all memory is freed.
 
 =item B<$set -E<gt> Begin>
 
-Starts an transaction. Calls the DBI method begin.
+Starts a transaction. Calls the DBI method begin.
 
 
 =item B<$set -E<gt> Rollback>
 
-Rolls back an transaction. Calls the DBI method rollback and makes sure that all 
+Rolls back a transaction. Calls the DBI method rollback and makes sure that all 
 internal buffers of DBIx::Recordset are flushed.
 
 
 =item B<$set -E<gt> Commit>
 
-Commits an transaction. Calls the DBI method commit and makes sure that all 
+Commits a transaction. Calls the DBI method commit and makes sure that all 
 internal buffers of DBIx::Recordset are flushed.
 
 
@@ -5243,20 +5489,20 @@ Returns the DBI statement handle of the last select.
 
 =item $set -> TableName ()
 
-Returns the name of the table of that recordset object
+Returns the name of the table of the recordset object.
 
 =item $set -> TableNameWithOutFilter ()
 
-Returns the name of the table of that recordset object, but removes
+Returns the name of the table of the recordset object, but removes
 the string given with !TableFilter, if it is the prefix of the table name.
 
 =item $set -> PrimKey ()
 
-Returns the primary key that is given in the !PrimKey parameter.
+Returns the primary key given in the !PrimKey parameter.
 
 =item $set -> TableFilter ()
 
-Returns the table filter that is given in the !TableFilter parameter.
+Returns the table filter given in the !TableFilter parameter.
 
 
 
@@ -5269,6 +5515,9 @@ Returns the record number of the record which will be returned for index 0.
 
 Returns the last executed SQL Statement.
 
+=item B<$set -E<gt> LastSerial ()>
+
+Return the last value of the field defined with !Serial
 
 =item B<$set -E<gt> Disconnect ()>
 
@@ -5322,7 +5571,7 @@ Returns an hash ref with some statistical values.
 =item DBIx::Recordset -> LastError ()
 
 Returns the last error message, if any. If called in an array context the first
-element receive the last error message and the second the last error code.
+element receives the last error message and the second the last error code.
 
 
 =back
@@ -5420,7 +5669,7 @@ and their relations easier.
 =head2 Joins
 
 First, you can specify more than one
-table to the B<!Table> parameter. If you do so, you need to specifiy how both
+table to the B<!Table> parameter. If you do so, you need to specify how both
 tables are related. You do this with B<!TabRelation> parameter. This method
 will access all the specified tables simultanously.
 
@@ -5527,7 +5776,7 @@ key of the record, but the human readable form is B<street>.
 			}
 		    }) ;
 
-For every record in the table, this example will return the fields
+For every record in the table, this example will return the fields:
 
   name  street_id  street
 
@@ -5569,7 +5818,7 @@ automatically recognized as a pointer to street.id.
 				     '!Table'	   => 'name') ;
 
 is enough. DBIx::Recordset will automatically add the !Links attribute. 
-Additionaly DBIx::Recordset adds a backlink, so for the table street, in our above example,
+Additionally, DBIx::Recordset adds a backlink, so for the table street, in our above example,
 there will be a link, named -name, which is a pointer from table street to all records in the
 table name where street.id is equal to name.street_id.
 
@@ -5578,7 +5827,7 @@ You may use the
 
 NOTE: Because of the backlinks DBIx::Recordset cannot handle links to the table itself correctly,
 In this case it tries to add two links with the same name and only one can win. This behaviour will be 
-corrected in a future release. For now you need to add the correct link manualy via the !Links
+corrected in a future release. For now you need to add the correct link manually via the !Links
 attribute.
 
 NOTE: To specify more then one link from one table to another table, you may prefix the field name
@@ -5590,7 +5839,7 @@ with an specifier followed by two underscores. Example:  first__street_id, secon
 
 The DBIx::Database object gathers information about a datasource. Its main purpose is 
 to create, at startup, an object which retrieves all necessary information from the 
-database; tries to detect links between tables; and stores this information for use 
+database.  This object detects links between tables and stores this information for use 
 by the DBIx::Recordset objects. There are additional methods which allow you to add kinds 
 of information which cannot be retreived automatically.
 
@@ -5621,7 +5870,7 @@ Name for this DBIx::Database object to save as.
 The name can be used in DBIx::Database::Get, or as !DataSource parameter in call to the
 DBIx::Recordset object.
 
-This is intended as mechanisem to retrieve the necessary metadata; for example, when 
+This is intended as mechanism to retrieve the necessary metadata; for example, when 
 your web server starts (e.g. in the startup.pl file of mod_perl). 
 Here you can give the database
 object a name. Later in your mod_perl or Embperl scripts, you can use this metadata by
@@ -5646,14 +5895,14 @@ same as setup parameter !DoOnConnect
 
 =back
 
-You also can specifies an hash ref which can contain the following parameters:
+You also can specify a hashref which can contain the following parameters:
 
 !DataSource, !Username, !Password, !DBIAttr, !SaveAs, !KeepOpen, !TableFilter, !DoOnConnect
 
 
 =head2 $db = DBIx::Database -> DBHdl 
 
-returns the database handle (only if you specify !KeepOpen when calling C<new>)
+returns the database handle (only if you specify !KeepOpen when calling C<new>).
 
 
 =head2 $db = DBIx::Database -> Get ($name)
@@ -5661,21 +5910,21 @@ returns the database handle (only if you specify !KeepOpen when calling C<new>)
 $name = The name of the DBIx::Database object you wish to retrieve 
 
 
-Get a DBIx::Database object which has already been set up based on the name
+Get a DBIx::Database object which has already been set up based on the name.
 
 
 
 =head2 $db -> TableAttr ($table, $key, $value)
 
-get and/or set an attribute for an specfic table
+get and/or set an attribute for an specfic table.
 
 =over 4
 
 =item $table
 
 Name of table(s). You may use '*' instead of the table
-name to specify an default value, which applies to all
-tables, for which are no other value is specified.
+name to specify a default value which applies to all
+tables for which no other value is specified.
 
 =item $key
 
@@ -5690,7 +5939,7 @@ if present, set key to this value
 =head2 $db -> TableLink ($table, $linkname, $value)
 
 Get and/or set a link description for an table. If no $linkname
-is given returns all links for that table.
+is given, returns all links for that table.
 
 =over 4
 
@@ -5722,13 +5971,14 @@ Name of table(s)
 
 =item $metadata
 
-if present, this must be a reference to a hash with the new metadata. You only
-should use this, if you really know what you do.
+If present, this must be a reference to a hash with the new metadata. You
+should only use this if you really know what you are doing.
 
 =item $clear
 
 Clears the metadata for the given table, The next call to DBIx::Database -> new
-will recreate the metadata. Usefull if your table has changed (e.g. by ALTER TABLE)
+will recreate the metadata. Useful if your table has changed (e.g. by
+ALTER TABLE).
 
 =back
 
@@ -5751,44 +6001,47 @@ Same as DBI. Executes a single SQL statement on the open database.
 
 =head1 Casesensitive/insensitiv
 
-In SQL all names (field/tablenames etc.) should be case insensitiv. Various
-DBMS handle the case of names different. For that reason I<DBIx::Recordset>
-translate all names to lower case, this makes sure your application will
-run with any DBMS, regardless if names returned in lower/uppercase by the
-DBMS. Some DBMS are casesensitiv (I know at least Sybase, depending on your collate
-settings). To use such a casesensitiv DBMS, the best is to create your database
-with all names written in lowercase. In situation, where this isn't possible, you 
+In SQL all names (field/tablenames etc.) should be case insensitive. Various
+DBMS handle the case of names differently. For that reason I<DBIx::Recordset>
+translates all names to lower case, ensuring your application will
+run with any DBMS, regardless of whether names are returned in
+lower/uppercase by the
+DBMS. Some DBMS are case-sensitive (I know at least Sybase, depending on your collate
+settings). To use such a case-sensitive DBMS, it is best to create your database
+with all names written in lowercase. In a situation where this isn't possible, you 
 can set C<$PreserveCase> to 1. In this case DBIx::Recordset will not perform any
-case translation. B<NOTE:> C<$PreserveCase> is still experimental any may change in
-further releases.
+case translation. B<NOTE:> C<$PreserveCase> is still experimental and may change in
+future releases.
 
 =head1 FETCHSIZE / $FetchsizeWarn
 
-Some operations in Perl (i.e. C<foreach>, assigning arrays) needs to know the size
+Some operations in Perl (i.e. C<foreach>, assigning arrays) need to know the size
 of the whole array. When Perl needs to know the size of an array it call the method
 C<FETCHSIZE>. Since not all DBD drivers/DBMS returns the number of selected rows
-after an SQL C<SELECT>, the only way to really determinate the number of selected
-rows, would be to fetch them all from the DBMS. Since this could cause a lot of work, it
-may be very inefficent. Therfor I<DBIx::Recordset> per default die's when Perl calls
+after an SQL C<SELECT>, the only way to really determine the number of selected
+rows would be to fetch them all from the DBMS. Since this could cause a lot of work, it
+may be very inefficent. Therefore I<DBIx::Recordset> by default calls die()
+when Perl calls
 FETCHSIZE. If you know your DBD drivers returns the correct value in C<$sth> -> C<rows>
 after the execution of an C<SELECT>, you can set C<$FetchsizeWarn> to zero to let
-C<FETCHSIZE> return the value from C<$sth> -> C<rows>. Setting it to 1, will cause
+C<FETCHSIZE> return the value from C<$sth> -> C<rows>. Setting it to 1 will cause
 I<DBIx::Recordset> to only issue a warning, but perform the operation.
 
-B<NOTE:> Since I don't have enought experiences how this behave with different DBMS, this
-feature is still experimental.
+B<NOTE:> Since I don't have enough experience with the behaviour of this
+feature with different DBMS, this is considered experimental.
 
 
 
 
-=head1 DEBUGING
+=head1 DEBUGGING
 
-DBIx::Recordset is able to write a logfile, so you can see what's happening
-inside. There are two public variables used for this purpose:
+DBIx::Recordset is able to write a logfile so you can see what's happening
+inside. There are two public variables and the C<!Debug> parameter used for
+this purpose:
 
 =over 4
 
-=item $DBIx::Recordset::Debug
+=item $DBIx::Recordset::Debug or !Debug
 
 Debuglevel 
  0 = off
@@ -5797,9 +6050,12 @@ Debuglevel
  3 = some more infos 
  4 = much infos
 
+C<$DBIx::Recordset::Debug> sets the default debug level for new objects,
+C<!Debug> can be used to set the debuglevel on a per object basis.
+
 =item DBIx::Recordset::LOG
 
-The filehandle used for logging. The default is STDERR, unless you are running under 
+The filehandle used for logging. The default is STDOUT, unless you are running under 
 HTML::Embperl, in which case the default is the Embperl logfile.
 
 =back
@@ -5825,8 +6081,8 @@ Since one possible application of DBIx::Recordset is its use in a web-server
 environment, some attention should paid to security issues.
 
 The current version of DBIx::Recordset does not include extended security management, 
-but some features can be used to make your database access safer. (more security features
-will come in further releases).
+but some features can be used to make your database access safer. (More security features
+will come in future releases.)
 
 First of all, use the security feature of your database. Assign the web server
 process as few rights as possible.
@@ -5847,7 +6103,7 @@ Example:
 that nobody from outside can override the values supplied by $Driver, $DB and
 $Table.
 
-It is also wise to pre-setup your objects by supplying parameters
+It is also wise to initialize your objects by supplying parameters
 which can not be changed. 
 
 Somewhere in your script startup (or at server startup time) add a setup call:
@@ -5884,7 +6140,7 @@ Currently, there are definitions for:
 
 =item B<DBD::CSV>
 
-=item B<DBD::Oracle (requires DBD::Orcale 0.60 or higher)>
+=item B<DBD::Oracle (requires DBD::Oracle 0.60 or higher)>
 
 =item B<DBD::Sysbase>
 
@@ -5925,6 +6181,11 @@ Setup a DBIx::Recordset for driver $Driver, database $DB to access table $Table.
  $set1 -> Select ('id=2') ;
 
  SELECT * from <table> WHERE id = 2 ;
+
+
+ $set -> Search({ '$fields' => 'id, balance AS paid - total ' }) ;
+
+ SELECT id, balance AS paid - total FROM <table>
 
 
  $set -> Select ({name => "Second Name\tFirst Name"}) ;

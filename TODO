@@ -13,14 +13,24 @@ Features
 
 - UPDATE/INSERT/DELETE for mulitple tables [Robert 1.1.2000]
 
+- Readd placeholders [Peter Zeltins 2.2.2000]
+
+- Parameter patch [Garrett Goebel 3.2.2000]
+
+- !DebugLevel !DebugFile [Terrence Brannon 2.4.00]
+
+- Do not insert empty numeric fields [Robert 1.5.00]
+
 Bugs
 ----
-- first time access of linked oject in form $set{-to}[$row]{name}
-  $set{-to}[row] returns undef
 
 - INSERT $rc = undef -> $rc = 1 -> mult linked nested objects (ka aktuell)
 
 - invalidate active statements with links
+
+- sometimes errors are not reported when updateing an array, until
+  Flush is called [Robert 1.5.00]
+
 
 Tests
 -----
@@ -28,3 +38,4 @@ Tests
 Doku 
 ----
 
+- !PrimKey needed for Array Update

@@ -13,7 +13,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Compat.pm,v 1.14 1999/12/22 21:22:13 richter Exp $
+#   $Id: Compat.pm,v 1.21 2000/06/16 07:58:41 richter Exp $
 #
 ###################################################################################
 
@@ -28,7 +28,11 @@ sub SelectFields
     my $table = shift ; 
     
     my $sth = $hdl -> prepare ("select * from $table where 1=0") ;
-    $sth -> execute () or return undef ;
+    if (!$sth -> execute ())
+        {
+        warn "select * from $table where 1=0  failed $DBI::errstr" ;
+        return undef ;
+        }
     
     return $sth ;
     }
@@ -40,7 +44,11 @@ sub SelectAllFields
     my $table = shift ; 
     
     my $sth = $hdl -> prepare ("select * from $table") ;
-    $sth -> execute () or return undef ;
+    if (!$sth -> execute ())
+        {
+        warn "select * from $table  failed $DBI::errstr" ;
+        return undef ;
+        }
     
     return $sth ;
     }
@@ -151,7 +159,54 @@ sub LimitOffsetStrMySQL
     return ($max > 0)?"LIMIT $start,$max":''  ;
     }	
 
+sub MysqlGetSerial
 
+    {
+    my ($dbh, $table) = @_ ;
+    
+    return $dbh -> {'mysql_insertid'} ;
+    }
+    
+sub SeqGetSerial
+
+    {    
+    my ($dbh, $table, $seq) = @_ ;
+    
+    $seq  ||= ($table . '_seq') ;
+    my $sth = $dbh -> prepare ("select $seq.nextval from dual") ;
+    $sth -> execute () or die "Cannot get serial from $seq ($DBI::errstr)" ;
+    my $row = $sth -> fetchrow_arrayref ;
+    
+    return $row->[0] ;
+    }
+    
+sub PgGetSerial
+
+    {    
+    my ($dbh, $table, $seq) = @_ ;
+    
+    $seq  ||= ($table . '_seq') ;
+    my $sth = $dbh -> prepare ("select nextval ('$seq')") ;
+    $sth -> execute () or die "Cannot get serial from $seq ($DBI::errstr)" ;
+    my $row = $sth -> fetchrow_arrayref ;
+    
+    return $row->[0] ;
+    }
+    
+
+sub InformixGetSerial
+
+    {
+    my ($dbh, $table) = @_ ;
+    
+    my $sth = $dbh -> prepare ("select distinct dbinfo('sqlca.sqlerrd1') from $table") ;
+    $sth -> execute () or die "Cannot get serial from $seq ($DBI::errstr)" ;
+    my $row = $sth -> fetchrow_arrayref ;
+    
+    return $row->[0] ;
+    }
+
+    
 ####################################################################################
 
 
@@ -167,12 +222,14 @@ sub LimitOffsetStrMySQL
             'NumericTypes'   => { 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 1, 7 => 1, 8 => 1, -5 => 1, -6 => 1}, # Default numeric ODBC Types
             'SupportJoin'    => 1,               # Default: Driver supports joins (select with multiple tables)
             'SupportSQLJoin' => 1,               # Default: Driver supports INNER/LEFT/RIGHT JOIN Syntax in SQL select
-            'SQLJoinOnly2Tabs' => 1,             # Default: Driver supports LEFT/RIGHT JOIN only with two tables
+            'SQLJoinOnly2Tabs' => 0,             # Default: Driver supports LEFT/RIGHT JOIN with more then two tables
             'HaveTypes'      => 1,               # Default: Driver supports $sth -> {TYPE}
             'NullOperator'   => 'IS',            # Default: Operator to compare with NULL is IS
 	    'NeedNullInCreate' => '',            # Default: NULL allowed without explicit declare in CREATE
 	    'EmptyIsNull'    => 0,		 # Default: Empty strings ('') and NULL are different
 	    'LimitOffset'    => undef,		 # Default: Don't use LIMIT/OFFSET in SELECTs
+            'GetSerialPreInsert' => undef,      # Default: Driver does not support serials
+            'GetSerialPostInsert' => undef,      # Default: Driver does not support serials
              },
 
     'ConfFile' =>
@@ -241,6 +298,7 @@ sub LimitOffsetStrMySQL
 #### Use the following line for older DBD::Pg versions (< 0.89) which does
 #    not support the table_info function
 #            'ListTables'     => \&ListTablesPg,    # DBD::Pg
+            'GetSerialPreInsert' => \&PgGetSerial,
             },
     
     'mSQL' => {
@@ -263,6 +321,7 @@ sub LimitOffsetStrMySQL
             'SQLJoinOnly2Tabs' => 0,		    # mysql supports LEFT/RIGHT JOIN with more than two tables
             'ListTables'     => \&ListTablesFunc,   # DBD::mysql $dbh -> func
 	    'LimitOffset'    => \&LimitOffsetStrMySQL, 
+            'GetSerialPostInsert' => \&MysqlGetSerial,
             },
 
     'Solid' => {
@@ -277,6 +336,7 @@ sub LimitOffsetStrMySQL
             'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1},
  	    'NeedNullInCreate' => 'NULL',          
             'ListTables'     => \&ListTablesODBC,    # Use DBI $dbh -> tables, exclude /^MSys/
+            'SQLJoinOnly2Tabs' => 1,             # Driver supports LEFT/RIGHT JOIN only with two tables
            },
     'Oracle' => {
             'Placeholders' => 3,		    # Placeholders supported, but cannot use a
@@ -290,6 +350,7 @@ sub LimitOffsetStrMySQL
 	    'EmptyIsNull'    => 1,		    # Oracle converts empty strings ('') to NULL
 # older DBD::Orcales only need the following one entry, but some test may fail
 #		'HaveTypes'      => 0		    #  Driver does not supports $sth -> {TYPE}
+            'GetSerialPreInsert' => \&SeqGetSerial,
             },
 
     'Sybase'  =>
@@ -311,7 +372,8 @@ sub LimitOffsetStrMySQL
             'Placeholders' => 2,
             'SupportSQLJoin' => 4,
             'SQLJoinOnly2Tabs' => 0,
-            'ListTables'     => \&ListTablesIfmx
+            'ListTables'     => \&ListTablesIfmx,
+            'GetSerialPostInsert' => \&InformixGetSerial,
             },
 
 

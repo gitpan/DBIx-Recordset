@@ -1,5 +1,49 @@
 Revision history for Perl extension DBIx::Recordset
 
+0.21
+
+  - Fixed problem with wrong StartRecordNo, which will also cause
+    problems with prev and next. Spotted by Alexander Siegel.
+  - Fixed problem that FETCHSIZE also returns one to much.
+    Spotted by Robert.
+  - Fixed the $last attribute of Search. Spotted by Roman Maeder.
+  - Fixed a bug in FETCHSIZE spotted by Robert.
+  - Allow different Filters for \\field and field in select.
+  - Fixed a problem with bind_param and LONGVARCHAR together
+    with DBD::ODBC
+  - Applied patch from Rob McMillin to the documentaion, which
+    corrects my bad english.
+  - DBIx::Recordset now supports serials fields. It is able
+    to insert a value from a sequence into a record upon insert
+    and return the value (for databases which supports sequences)
+    or simply return the value of last serial field (for databases
+    which does support serial/autoincrment fields)
+  - For DBMS with does not support sequences, there are two new
+    classes (DBIx::Recordset::DBSeq/FileSeq) which emulates sequences
+    in a DB table or the filesystem (see !SeqClass parameter)
+  - Execute now retrievs always the correct record after an INSERT
+    when a serial fields is specified. (and serial fields are supported
+    by the DBMS)
+  - Documented the $where parameter, which allows to pass a literal
+    SQL WHERE expresseion. (See SYNOPSIS)
+  - Added the $values parameter, so you can now pass parameters which
+    should be bind to the placeholders in the expression given 
+    with $where. This allows more complex WHERE expressions to be setup.
+  - Wrote a short SYNOSIS sections, which gives some examples to make
+    it easier to start with DBIx::Recordset.      
+  - Multiple values for a single field could now be also passed as
+    array ref.
+  - !TableFilter parameter is now always used as prefix, so only
+    thoses tables which starts with the prefix given in !TableFilter
+    are deteced by DBIx::Database.
+  - Removed the error message that zero record are updated instead
+    of one, because this were sometimes not correct. Spotted by
+    Roman Maeder.
+  - Fixed a problem which occurs when you access a linked table
+    for the first time (e.g. $set{-to}{foo}). Spotted by
+    Andrej Mikus.
+  - Removed a lot of -w warnings.
+    
 0.20  6. Jan 2000
 
   - Fixed a problem with perl 5.004_04. Spotted by Paul J. Schinder.
@@ -81,18 +125,32 @@ Revision history for Perl extension DBIx::Recordset
   - DBIx::Recordset::Row::Flush make sure that exactly one row is updated. Based
     on a patch from Alexander Smishlajev.
   - By setting $FetchsizeWarn to zero, you can now make DBIx::Recordset return
+
     the value of $sth -> rows, when the FETCHSIZE method is called by Perl.
+
     This feature is still experimental, because I don't what different DBMS
+
     returns in $sth -> rows, after an SELECT. Patch from Robert.
+
   - By setting $PreserveCase, you can cause DBIx::Recordset to _not_ translate all
+
     names to lowercase. Per default DBIx::Recordset translates all names (tablenames/
+
     fieldnames) to lowercase to let application work with different DBMS.
+
   - Updated docs of DBIx::Compat.
+
   - If the DBMS supports it, DBIx::Recordset will use the LIMIT/OFFSET keywords if you
+
     only want to fetch a limited number of row from the database (for parameters 
+
     $start and $max). Patch from Robert.
+
   - Added an indroduction to DBIx::Recordset (based on my talk on the 1999 Perl conference)
+
     which is viewable with perldoc Intrors.pod
+
+
 
 
 0.19  30 Mar 1999

@@ -26,6 +26,8 @@ END {
 
 
 use DBIx::Recordset ;
+use DBIx::Recordset::FileSeq ;
+use DBIx::Recordset::DBSeq ;
 
 $loaded = 1;
 print "ok\n";
@@ -89,6 +91,7 @@ sub Check
     my $v ;
     my $k ;
 
+    local $^W = 0 ;
 
     print LOG "CHK-IDS: @$ids\n" ;
     
@@ -247,16 +250,16 @@ sub AddTestRow
     $id =~ s/\'(.*?)\'/$1/ ; 
     while (($k, $v) = each (%$dat))
         {
-        if ($v eq 'NULL')
+        if (defined ($v) && $v eq 'NULL')
             {
             $v = undef ;
             }
         else
             {
-            $v =~ s/\'(.*?)\'/$1/ ; 
+            $v =~ s/\'(.*?)\'/$1/ if ($v) ; 
             }
         $TestCheck{$id}{$k} = $v ;
-        print LOG "TEST-DAT: Table $Table[$tabno] \$TestCheck{$id}{$k} = $v\n" ;
+        print LOG "TEST-DAT: Table $Table[$tabno] \$TestCheck{$id}{$k} = " . ($v || '') . "\n" ;
         if ($ex)
             {
             #$hTestFields{$k} = 1 ;
@@ -271,8 +274,12 @@ sub AddTestRow
 
     delete $$dat{"*$key"} ;
     
+
+    {
+    local $^W= 0 ;
     $k = join (',', keys(%$dat)) ;
     $v = join (',', values(%$dat)) ;
+    }
 
     push (@TestSetup, "INSERT INTO $Table[$tabno] ($k) VALUES ($v)") if ($v && $k) ;
 
@@ -379,7 +386,7 @@ sub DoTest
     $CreateNULL = DBIx::Compat::GetItem ($Driver, 'NeedNullInCreate') ;
     $EmptyIsNull= DBIx::Compat::GetItem ($Driver, 'EmptyIsNull') ;
 
-    @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4', 'dbix_rs5', 'dbix_rs6') ;
+    @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4', 'dbix_rs5', 'dbix_rs6', 'dbixseq') ;
 
     $errors = 0 ;
 
@@ -414,12 +421,13 @@ use strict ;
     print LOG "\n--------------------\n" ;
     @TestSetup =
         (
-        "CREATE TABLE $Table[0] ( id INT $CreateNULL, name CHAR (20) $CreateNULL, value1 INT $CreateNULL, addon CHAR (20) $CreateNULL)",
+        "CREATE TABLE $Table[0] ( id INT $CreateNULL, name CHAR (20) $CreateNULL, value1 INT $CreateNULL, addon " . ($Driver eq 'mysql'?'TEXT':'CHAR(20)') . " $CreateNULL)",
         "CREATE TABLE $Table[1] ( id INTEGER $CreateNULL, name2 VARCHAR(20) $CreateNULL, value2 INTEGER $CreateNULL, $Table[3]_id INTEGER $CreateNULL)",
-        "CREATE TABLE $Table[2] ( value1 INTEGER $CreateNULL, txt CHAR(20) $CreateNULL )",
+        "CREATE TABLE $Table[2] ( value1 INTEGER $CreateNULL, txt " . ($Driver eq 'mysql'?'TEXT':'CHAR(20)') . " $CreateNULL )",
         "CREATE TABLE $Table[3] ( id INTEGER $CreateNULL, typ CHAR(20) $CreateNULL)",
         "CREATE TABLE $Table[4] ( id INTEGER $CreateNULL, txt5 CHAR(20) $CreateNULL, up__rs5_id INTEGER $CreateNULL,  a__rs6_id INTEGER $CreateNULL,  b__rs6_id INTEGER $CreateNULL)",
         "CREATE TABLE $Table[5] ( id INTEGER $CreateNULL, txt6 CHAR(20) $CreateNULL)",
+        "CREATE TABLE $Table[6] ( name varchar (32) $CreateNULL, cnt INTEGER $CreateNULL, maxcnt integer)",
         ) ;
 
     @TestData =
@@ -2655,6 +2663,40 @@ use strict ;
 
 	# ---------------------
 
+	printlogf "Select with linked name hash access";
+	print LOG "\n--------------------\n" ;
+
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+					    '!Username'     =>  $User,
+					    '!Password'     =>  $Password,
+					    '!Table'        =>  "$Table[0]",
+					    '!Links'        =>  {
+								'subid' => {
+								    '!Table' => $Table[1],
+								    '!LinkedField' => 'id',
+								    '!PrimKey' => 'id',
+								    }
+								},
+                        '!PrimKey'      => 'id',
+                        'id' => 3,
+						})  or die "not ok ($DBI::errstr)" ;
+
+                        if ($set3{subid}{id} != 3 || $set3{subid}{value2} != 3456)
+                {
+                printlog "ERROR in $lasttest\n" ;
+                $errors++ ;
+                }        
+            else
+                {
+                print "ok\n" ;
+                }
+
+
+
+	DBIx::Recordset::Undef ('set3') ;
+    
+
+	# ---------------------
 	printlogf "Select with linked names mode 1";
 	print LOG "\n--------------------\n" ;
 
@@ -2975,7 +3017,7 @@ use strict ;
     
     $assign {62} -> {id} = 62 ;
     
-    my @ids = @{$TestIds[0]} ;
+    @ids = @{$TestIds[0]} ;
     
     foreach my $id (@ids)
 	{
@@ -3267,7 +3309,7 @@ use strict ;
 
         $e = $errors ;
 
-        my $tables = $db2 -> AllTables ;
+        $tables = $db2 -> AllTables ;
 
         if (($n = keys (%$tables)) != 2)
             {
@@ -3303,9 +3345,121 @@ use strict ;
 
         print "ok\n" if ($e == $errors) ;
 
+        if ($Driver eq 'mysql')
+            {
+            $e = $errors ;
+                # ---------------------
+    
+            printlogf "DBIx::Recordset::DBseq";
+            print LOG "\n--------------------\n" ;
+    
+            my $seq = DBIx::Recordset::DBSeq -> new ($db2 -> DBHdl, $Table[6]) ;
+            
+            if ($seq -> NextVal('foo') != 1)
+                {
+                printlog "ERROR in $lasttest: sequence value != 1\n" ;
+                $errors++ ;
+                }        
+            elsif ($seq -> NextVal('foo') != 2)
+                {
+                printlog "ERROR in $lasttest: sequence value != 2\n" ;
+                $errors++ ;
+                }        
+            elsif ($seq -> NextVal('foo') != 3)
+                {
+                printlog "ERROR in $lasttest: sequence value != 3\n" ;
+                $errors++ ;
+                }        
+            if ($seq -> NextVal('bar') != 1)
+                {
+                printlog "ERROR in $lasttest: sequence value for bar != 1\n" ;
+                $errors++ ;
+                }        
+            if ($seq -> NextVal('foo') != 4)
+                {
+                printlog "ERROR in $lasttest: sequence value != 4\n" ;
+                $errors++ ;
+                }        
+            print "ok\n" if ($e == $errors) ;
+            
+            }
+            
         $db = undef ;
         $db2 = undef ;
         }
+
+        {
+        my $e = $errors ;
+
+        printlogf "DBIx::Recordset::FileSeq";
+        print LOG "\n--------------------\n" ;
+
+        unlink <test/seq.*> ;
+    
+        my $seq = DBIx::Recordset::FileSeq -> new (undef ,'test') ;
+        
+        if ($seq -> NextVal('foo') != 1)
+            {
+            printlog "ERROR in $lasttest: sequence value != 1\n" ;
+            $errors++ ;
+            }        
+        elsif ($seq -> NextVal('foo') != 2)
+            {
+            printlog "ERROR in $lasttest: sequence value != 2\n" ;
+            $errors++ ;
+            }        
+        elsif ($seq -> NextVal('foo') != 3)
+            {
+            printlog "ERROR in $lasttest: sequence value != 3\n" ;
+            $errors++ ;
+            }        
+        if ($seq -> NextVal('bar') != 1)
+            {
+            printlog "ERROR in $lasttest: sequence value for bar != 1\n" ;
+            $errors++ ;
+            }        
+        if ($seq -> NextVal('foo') != 4)
+            {
+            printlog "ERROR in $lasttest: sequence value != 4\n" ;
+            $errors++ ;
+            }        
+
+        print "ok\n" if ($e == $errors) ;
+        }
+        
+        {
+        my $e = $errors ;
+
+        printlogf "DBIx::Recordset::FileSeq 2";
+        print LOG "\n--------------------\n" ;
+
+        my $seq = DBIx::Recordset::FileSeq -> new (undef ,'test') ;
+        
+        if ($seq -> NextVal('foo') != 5)
+            {
+            printlog "ERROR in $lasttest: sequence value != 5\n" ;
+            $errors++ ;
+            }        
+        elsif ($seq -> NextVal('foo') != 6)
+            {
+            printlog "ERROR in $lasttest: sequence value != 6\n" ;
+            $errors++ ;
+            }        
+        if ($seq -> NextVal('bar') != 2)
+            {
+            printlog "ERROR in $lasttest: sequence value for bar != 2\n" ;
+            $errors++ ;
+            }        
+        if ($seq -> NextVal('foo') != 7)
+            {
+            printlog "ERROR in $lasttest: sequence value != 7\n" ;
+            $errors++ ;
+            }        
+
+        print "ok\n" if ($e == $errors) ;
+        }
+
+
 
     #########################################################################################
 
@@ -3337,6 +3491,8 @@ use strict ;
 
 
 unlink "test.log" ;
+unlink <test/seq.*> ;
+chmod 0777, 'test' ; 
     
     open LOG, ">>test.log" or die "Cannot open test.log" ; 
 
@@ -3349,6 +3505,8 @@ unlink "test.log" ;
     select (STDERR) ; $| = 1 ;
     select (LOG) ; $| = 1 ;
     select (STDOUT) ; $| = 1 ;
+
+
 
 if ($#ARGV != -1)
     {
@@ -3373,6 +3531,7 @@ if ($#ARGV != -1)
 do $configfile ;
 
 @drivers = sort keys %Drivers ;
+
 
 foreach $drv (@drivers)
     {

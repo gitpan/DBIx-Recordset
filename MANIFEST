@@ -10,4 +10,6 @@ eg/README
 eg/search.pl
 eg/search.htm
 Intrors.pod
+Recordset/FileSeq.pm
+Recordset/DBSeq.pm
 
