@@ -14,7 +14,8 @@ use vars qw{ *set1 *set2 *set3 *set4 *set5 *set6 *set7 *set8 *set9 *set10
              $errors $fatal $loaded
              $Join $SQLJoin $CreateNULL $EmptyIsNull
              *rs $rs @rs %rs
-             $nocleanup} ;
+             $nocleanup
+             $QuoteIdentifier} ;
 
 
 BEGIN { $| = 1;  $fatal = 1 ; print "\nLoading...                "; }
@@ -226,6 +227,39 @@ sub Check
     return 0 ;
     }
 
+#################################################
+
+sub CheckField 
+
+    {
+    my ($name, $is, $should) = @_ ;
+    
+    if (defined ($is) || $EmptyIsNull) 
+        {
+        $is =~ /^(.*?)\s*$/ ;
+        $is = $1 ; 
+        }
+    else
+        {
+        $is = 'NULL' ;
+        }
+    $should = 'NULL' if (!defined ($should) && !$EmptyIsNull) ;
+
+    print LOG "CHK-OK?: $name = <$is>; Should = <$should>\n" ;
+     
+    if ($should ne $is)
+        {
+        printlog "ERROR in $lasttest\n" ;
+        printlog "Field  = $name\n" ;
+        printlog "Is     = $is\n" ;
+        printlog "Should = $should\n" ;
+        $errors++ ;
+        return 1 ;
+        }
+
+    return 0 ;
+    }
+
 
 #################################################
 
@@ -277,11 +311,15 @@ sub AddTestRow
 
     {
     local $^W= 0 ;
-    $k = join (',', keys(%$dat)) ;
+    my @names = map { ($_ =~ /\s/)?"\"$_\"":$_ } keys(%$dat) ;
+    $k = join (',', @names) ;
     $v = join (',', values(%$dat)) ;
     }
 
-    push (@TestSetup, "INSERT INTO $Table[$tabno] ($k) VALUES ($v)") if ($v && $k) ;
+    my $t = $Table[$tabno]  ;
+    $t = ($t =~ /\s/)?"\"$t\"":$t ;
+
+    push (@TestSetup, "INSERT INTO $t ($k) VALUES ($v)") if ($v && $k) ;
 
     }
 
@@ -361,12 +399,24 @@ sub AddTestData
 sub DropTestTables
 
     {
-      my ($dbh, @tlist) =@_;
-      return unless ($dbh and @tlist);
-      foreach my $st (map "DROP TABLE $_", @tlist) {
-        my $rc =$dbh->do( $st);
-      };
-      print LOG '-- Dropped ', join(', ', @tlist), "\n" ;
+    my ($dbh, @tlist) =@_;
+    return unless ($dbh and @tlist);
+    foreach (@tlist) 
+        {
+        if ($QuoteIdentifier)
+            {
+            if (!$dbh->do( "DROP TABLE \"$_\""))
+                {
+                $dbh->do( 'DROP TABLE "'. uc ($_) . '"') ;
+                }
+            }
+        else
+            {
+            $dbh->do( "DROP TABLE $_");
+            }
+    
+        };
+    print LOG '-- Dropped ', join(', ', @tlist), "\n" ;
     }
 
  
@@ -385,8 +435,11 @@ sub DoTest
     $SQLJoin =  DBIx::Compat::GetItem ($Driver, 'SupportSQLJoin') ;
     $CreateNULL = DBIx::Compat::GetItem ($Driver, 'NeedNullInCreate') ;
     $EmptyIsNull= DBIx::Compat::GetItem ($Driver, 'EmptyIsNull') ;
+    $QuoteIdentifier= DBIx::Compat::GetItem ($Driver, 'QuoteIdentifier') ;
 
-    @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4', 'dbix_rs5', 'dbix_rs6', 'dbixseq') ;
+    @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4', 'dbix_rs5', 'dbix_rs6', 'dbixseq', 'dbixrsdel') ;
+
+    push @Table, 'DBIXRS 8' if ($QuoteIdentifier) ;
 
     $errors = 0 ;
 
@@ -428,7 +481,10 @@ use strict ;
         "CREATE TABLE $Table[4] ( id INTEGER $CreateNULL, txt5 CHAR(20) $CreateNULL, up__rs5_id INTEGER $CreateNULL,  a__rs6_id INTEGER $CreateNULL,  b__rs6_id INTEGER $CreateNULL)",
         "CREATE TABLE $Table[5] ( id INTEGER $CreateNULL, txt6 CHAR(20) $CreateNULL)",
         "CREATE TABLE $Table[6] ( name varchar (32) $CreateNULL, cnt INTEGER $CreateNULL, maxcnt integer)",
+        "CREATE TABLE $Table[7] ( id integer, dbixrsdel_id integer)",
         ) ;
+
+    push @TestSetup, "CREATE TABLE \"$Table[8]\" ( id integer, \"id 2\" integer)" if ($QuoteIdentifier) ;
 
     @TestData =
         (
@@ -502,13 +558,27 @@ use strict ;
                 { 'id' => 8 ,  'txt6' => "'8 in Tab6'",   },
                 { 'id' => 9 ,  'txt6' => "'9 in Tab6'",   },
             ],
+            [],
+            [
+                { id => 1, dbixrsdel_id => 2 },
+                { id => 2, dbixrsdel_id => 3 },
+                { id => 3, dbixrsdel_id => 4 },
+                { id => 4, dbixrsdel_id => 1 },
+            ],
         ) ;
+
+
+    $TestData[8] = [ 
+                { 'id' => 1 ,  'id 2' => 12,   },
+                { 'id' => 2 ,  'id 2' => 13    },
+                ] if ($QuoteIdentifier) ;
+
 
     my $i ;
 
     for ($i = 0; $i <= $#Table; $i++)
         {
-        AddTestData ($i) if ($i != 3) ;
+        AddTestData ($i) if ($i != 3 && $TestData[$i]) ;
         }
 
     AddTestData (3, 'typ') ;
@@ -801,6 +871,30 @@ use strict ;
 
     # ---------------------
 
+    printlogf "Select multiply values array ref";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({name => ["Second Name", "Third Name"],
+                           '$operator' => '='})  or die "not ok ($DBI::errstr)" ;
+
+
+    
+    Check ([2, 3], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select multiply values & operators";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({id          => [5,7],
+                     '*id'        => ['>=', '<='],
+                     '$valueconj' => 'and'})  or die "not ok ($DBI::errstr)" ;
+
+
+    
+    Check ([5, 6, 7], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
     printlogf "Select \$valuesplit";
     print LOG "\n--------------------\n" ;
 
@@ -846,6 +940,31 @@ use strict ;
 
     # ---------------------
 
+    $set1 -> Search ({id => 1,name => 'First Name',addon => 'Is'})  or die "not ok ($DBI::errstr)" ;
+
+    printlogf "MoreRecords yes";
+    print LOG "\n--------------------\n" ;
+
+    if (!$set1 -> MoreRecords)
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns false\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    # ---------------------
+
+    printlogf "Search";
+    print LOG "\n--------------------\n" ;
+
+
+    Check ([1], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
     printlogf "Search";
     print LOG "\n--------------------\n" ;
 
@@ -853,6 +972,34 @@ use strict ;
 
 
     Check ([1], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "MoreRecords no";
+    print LOG "\n--------------------\n" ;
+
+    if ($set1 -> MoreRecords)
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    # ---------------------
+
+    if ($Driver ne 'CSV')
+        {
+        printlogf "Search with subexpr";
+        print LOG "\n--------------------\n" ;
+
+        $set1 -> Search ({'$expr' => { id => 2, '*id' => '>' }, name => 'S', '*name' => '>'})  or die "not ok ($DBI::errstr)" ;
+
+
+        Check ([3, 6, 7, 10, 12, 13], $TestFields[0], \@set1) or print "ok\n" ;
+        }
 
     # ---------------------
 
@@ -865,6 +1012,134 @@ use strict ;
     Check ([1,2], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
+
+    printlogf "MoreRecords with \$max";
+    print LOG "\n--------------------\n" ;
+
+    if ($set1 -> MoreRecords)
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    # ---------------------
+
+
+    printlogf "MoreRecords(1) with \$max ";
+    print LOG "\n--------------------\n" ;
+
+    if (!$set1 -> MoreRecords(1))
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns false\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    # ---------------------
+
+    printlogf "MoreRecords with \$max 2";
+    print LOG "\n--------------------\n" ;
+
+    if ($set1 -> MoreRecords)
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+
+
+    # ---------------------
+
+    printlogf "New Search for more";
+    print LOG "\n--------------------\n" ;
+
+    *set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  $Table[0],
+                                        '$start'        =>  2,
+                                        '$max'          =>  2,
+                                        '$next'         =>  1,
+                                        '$order'        =>  'id',
+                                        "id"            =>  "1\t2\t3\t4\t5\t6" }) or die "not ok ($DBI::errstr)" ;
+
+    Check ([5,6], $TestFields[0], \@set6) or print "ok\n" ;
+
+
+    # ---------------------
+
+
+    printlogf "MoreRecords(1) with \$max no";
+    print LOG "\n--------------------\n" ;
+
+    if ($set6 -> MoreRecords(1))
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    DBIx::Recordset::Undef ('set6') ;
+
+
+    # ---------------------
+
+    printlogf "New Search for more 2";
+    print LOG "\n--------------------\n" ;
+
+    *set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  $Table[0],
+                                        '$start'        =>  2,
+                                        '$max'          =>  2,
+                                        '$next'         =>  1,
+                                        '$order'        =>  'id',
+                                        "id"            =>  "1\t2\t3\t4\t5\t6" }) or die "not ok ($DBI::errstr)" ;
+
+    my @data ;
+    push @data, $set6[0] ;
+    push @data, $set6[1] ;
+    push @data, $set6[2] ;
+    push @data, $set6[2] ;
+    push @data, $set6[2] ;
+
+    Check ([5,6], $TestFields[0], \@data) or print "ok\n" ;
+
+
+    # ---------------------
+
+
+    printlogf "MoreRecords(1) with \$max no 2";
+    print LOG "\n--------------------\n" ;
+
+    if ($set6 -> MoreRecords(1))
+        {
+        printlog "ERROR in $lasttest: MoreRecords returns true\n" ;
+        $errors++ ;
+        }
+    else
+        {
+        print "ok\n" ;
+        }
+
+    DBIx::Recordset::Undef ('set6') ;
+
+# ---------------------
 
     printlogf "Search next ones";
     print LOG "\n--------------------\n" ;
@@ -1307,6 +1582,25 @@ use strict ;
 
     # ---------------------
 
+    if ($QuoteIdentifier) 
+        {
+        printlogf "Quoted Identifiers";
+        print LOG "\n--------------------\n" ;
+        *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  "\"$Table[8]\"",
+                                                })  or die "not ok ($DBI::errstr)" ;
+
+        Check ([1, 2], $TestFields[8], \@set1) or print "ok\n" ;
+
+
+        DBIx::Recordset::Undef ('set1') ;
+        }
+
+
+    # ---------------------
+
 
     printlogf "New Setup";
     print LOG "\n--------------------\n" ;
@@ -1618,7 +1912,34 @@ use strict ;
 
     DBIx::Recordset::Undef ('set12') ;
 
+    # ---------------------
 
+    if ($Driver ne 'CSV')
+	{
+        printlogf "DeleteWithLinks";
+        print LOG "\n--------------------\n" ;
+        *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[7],
+                                                })  or die "not ok ($DBI::errstr)" ;
+
+        $set1 -> {'*Links'}{'-dbixrsdel'}{'!OnDelete'} = DBIx::Recordset::odDELETE ; 
+
+        Check ([1, 2, 3, 4], $TestFields[7], \@set1) or print "ok\n" ;
+
+        printlogf "";
+        print LOG "\n--------------------\n" ;
+        $set1 -> DeleteWithLinks ({ 'id' => 1
+                                                })  or die "not ok ($DBI::errstr)" ;
+
+        $set1 -> Search ;
+
+        Check ([], $TestFields[7], \@set1) or print "ok\n" ;
+
+
+        DBIx::Recordset::Undef ('set1') ;
+        }
 
     # ---------------------
 
@@ -1989,6 +2310,63 @@ use strict ;
         #untie %set13h ;
         #@set13h = () ;
         #DBIx::Recordset::Undef ('set13') ;
+        }
+
+    # ---------------------
+        {
+        printlogf "PreFetch Hash with merge";
+        print LOG "\n--------------------\n" ;
+
+        my %set13h3 ;
+
+        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[3],
+                                            '!PreFetch'     =>  '*',
+                                            '!MergeFunc'    =>  sub { my ($a, $b) = @_ ; $a->{typ} .= ' , ' . $b->{typ} ; $a->{typ} =~ s/\s+/ /g ;   },
+                                            '!PrimKey'      =>  'id'} ;
+    
+        my $ec = $errors ;
+
+        CheckField ('id', $set13h3{1}{id}, 1) ;
+        CheckField ('typ', $set13h3{1}{typ}, 'First item Type 1 , First item Type 2 , First item Type 3') ;
+        CheckField ('id', $set13h3{2}{id}, 2) ;
+        CheckField ('typ', $set13h3{2}{typ}, 'Second item Type 1 , Second item Type 2 , Second item Type 3 , Second item Type 4') ;
+        CheckField ('id', $set13h3{3}{id}, 3) ;
+        CheckField ('typ', $set13h3{3}{typ}, 'Third item Type 1') ;
+
+        print "ok\n" if ($ec == $errors) ;
+        }
+
+    # ---------------------
+        {
+        printlogf "Hash with merge";
+        print LOG "\n--------------------\n" ;
+
+        my %set13h3 ;
+
+        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[3],
+                                            '!MergeFunc'    =>  sub { my ($a, $b) = @_ ; $a->{typ} .= ' , ' . $b->{typ} ; $a->{typ} =~ s/\s+/ /g ; },
+                                            '!PrimKey'      =>  'id'} ;
+    
+        my $ec = $errors ;
+        my $x ;
+
+        $x = $set13h3{1} ;
+        CheckField ('id',  $x -> {id}, 1) ;
+        CheckField ('typ', $x -> {typ}, 'First item Type 1 , First item Type 2 , First item Type 3') ;
+        $x = $set13h3{2} ;
+        CheckField ('id', $x -> {id}, 2) ;
+        CheckField ('typ', $x -> {typ}, 'Second item Type 1 , Second item Type 2 , Second item Type 3 , Second item Type 4') ;
+        $x = $set13h3{3} ;
+        CheckField ('id', $x -> {id}, 3) ;
+        CheckField ('typ', $set13h3{3}{typ}, 'Third item Type 1') ;
+
+        print "ok\n" if ($ec == $errors) ;
         }
 
     # ---------------------
@@ -3266,7 +3644,7 @@ use strict ;
 
         foreach (@Table)
             {
-            if (!$tables -> {$_})
+            if (!$tables -> {lc($_)} && !$tables -> {uc($_)} )
                 {
                 printlog "ERROR in $lasttest: table $_ not found\n" ;
 	        $errors++ ;
@@ -3282,7 +3660,12 @@ use strict ;
                 printlog "ERROR in $lasttest: table $_ does not contains the right link (#$n)\n" ;
 	        $errors++ ;
                 }        
-            elsif ($_ ne $Table[1] && $_ ne $Table[3] && keys (%$l) != 0)
+            elsif ($_ eq $Table[7] && (($n = keys (%$l)) != 2 || !$l -> {"-$Table[7]"} || !$l -> {"*$Table[7]"}))
+                {
+                printlog "ERROR in $lasttest: table $_ does not contains the right link (#$n)\n" ;
+	        $errors++ ;
+                }        
+            elsif ($_ ne $Table[1] && $_ ne $Table[3]  && $_ ne $Table[7] && keys (%$l) != 0)
                 {
                 printlog "ERROR in $lasttest: table $_ contains wrong link\n" ;
 	        $errors++ ;

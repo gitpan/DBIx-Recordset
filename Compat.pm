@@ -13,7 +13,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Compat.pm,v 1.21 2000/06/16 07:58:41 richter Exp $
+#   $Id: Compat.pm,v 1.26 2001/07/10 03:58:58 richter Exp $
 #
 ###################################################################################
 
@@ -31,6 +31,22 @@ sub SelectFields
     if (!$sth -> execute ())
         {
         warn "select * from $table where 1=0  failed $DBI::errstr" ;
+        return undef ;
+        }
+    
+    return $sth ;
+    }
+
+sub SelectFieldsQuoted
+
+    {
+    my $hdl   = shift ; 
+    my $table = shift ; 
+    
+    my $sth = $hdl -> prepare ("select * from \"$table\" where 1=0") ;
+    if (!$sth -> execute ())
+        {
+        warn "select * from \"$table\" where 1=0  failed $DBI::errstr" ;
         return undef ;
         }
     
@@ -225,11 +241,17 @@ sub InformixGetSerial
             'SQLJoinOnly2Tabs' => 0,             # Default: Driver supports LEFT/RIGHT JOIN with more then two tables
             'HaveTypes'      => 1,               # Default: Driver supports $sth -> {TYPE}
             'NullOperator'   => 'IS',            # Default: Operator to compare with NULL is IS
+            'HasInOperator'  => 1,               # Default: DBMS support x IN (y)
 	    'NeedNullInCreate' => '',            # Default: NULL allowed without explicit declare in CREATE
 	    'EmptyIsNull'    => 0,		 # Default: Empty strings ('') and NULL are different
 	    'LimitOffset'    => undef,		 # Default: Don't use LIMIT/OFFSET in SELECTs
-            'GetSerialPreInsert' => undef,      # Default: Driver does not support serials
+            'GetSerialPreInsert' => undef,       # Default: Driver does not support serials
             'GetSerialPostInsert' => undef,      # Default: Driver does not support serials
+            'CreateTypes' => {},                 # conversion for CreateTables
+            'CreateSeq'    => 0,                 # Create sequence for counter
+            'CreatePublic' => 0,                 # Create public synonym for table
+            'CanDropColumn' => 1,                # DBMS can drop a column
+            'QuoteIdentifier' => undef,          # DBMS can handle idntifiers with spaces by quoteing them. Default: no
              },
 
     'ConfFile' =>
@@ -251,6 +273,7 @@ sub InformixGetSerial
             'HaveTypes'      => 0,              # Driver does not support $sth -> {TYPE}
             'ListTables'     => undef,		# no tables
 	    'EmptyIsNull'    => 1,		# DBD::CSV does not really knows about NULL
+            'HasInOperator'  => 0,              # DBD::CSV does not support x IN (y)
 	},	
 
     'XBase' =>
@@ -274,7 +297,7 @@ sub InformixGetSerial
                                 23 => 1, 
                                 700 => 1, 
                                 701 => 1, 
-                                1005 => 1, 
+                                1005 => 0, 
                                 1006 => 1, 
                                 1007 => 1, 
                                 }, 
@@ -322,6 +345,10 @@ sub InformixGetSerial
             'ListTables'     => \&ListTablesFunc,   # DBD::mysql $dbh -> func
 	    'LimitOffset'    => \&LimitOffsetStrMySQL, 
             'GetSerialPostInsert' => \&MysqlGetSerial,
+            'CreateTypes' =>                        # conversion for CreateTables
+                    {
+                    'counter'  => 'integer not null auto_increment',
+                    }
             },
 
     'Solid' => {
@@ -336,7 +363,12 @@ sub InformixGetSerial
             'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1},
  	    'NeedNullInCreate' => 'NULL',          
             'ListTables'     => \&ListTablesODBC,    # Use DBI $dbh -> tables, exclude /^MSys/
-            'SQLJoinOnly2Tabs' => 1,             # Driver supports LEFT/RIGHT JOIN only with two tables
+            'SQLJoinOnly2Tabs' => 0,             # Driver supports LEFT/RIGHT JOIN only with two tables
+            'CreateTypes' =>                        # conversion for CreateTables
+                        {
+                        'tinytext' => 'text',
+                        'text'     => 'longtext',
+                        },
            },
     'Oracle' => {
             'Placeholders' => 3,		    # Placeholders supported, but cannot use a
@@ -351,6 +383,20 @@ sub InformixGetSerial
 # older DBD::Orcales only need the following one entry, but some test may fail
 #		'HaveTypes'      => 0		    #  Driver does not supports $sth -> {TYPE}
             'GetSerialPreInsert' => \&SeqGetSerial,
+            'CreateTypes' =>                        # conversion for CreateTables
+                        {
+                        'counter'  => 'integer',
+                        'tinytext' => 'varchar2(256)',
+                        'text'     => 'varchar2(2000)',
+                        'datetime' => 'date',
+                        'bool'     => 'number(1)',
+                        'bit'      => 'number(1)',
+                        },
+            'CreateSeq'    => 1,                      # Create sequence for counter
+            'CreatePublic' => 1,                      # Create public synonym for table
+            'CanDropColumn' => 0,                     # DBMS can drop a column
+            'QuoteIdentifier' => '""',                # DBMS can handle idntifiers with spaces by quoteing them.
+##            'ListFields'     => \&SelectFieldsQuoted, # Use Select to get field names
             },
 
     'Sybase'  =>
@@ -374,6 +420,7 @@ sub InformixGetSerial
             'SQLJoinOnly2Tabs' => 0,
             'ListTables'     => \&ListTablesIfmx,
             'GetSerialPostInsert' => \&InformixGetSerial,
+            'QuoteIdentifier' => $ENV{DELIMIDENT}?'""':undef,        # DBMS can handle idntifiers with spaces by quoteing them.
             },
 
 

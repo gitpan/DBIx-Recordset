@@ -1,7 +1,7 @@
 
 ###################################################################################
 #
-#   DBIx::Recordset - Copyright (c) 1997-2000 Gerald Richter / ECOS
+#   DBIx::Recordset - Copyright (c) 1997-2001 Gerald Richter / ECOS
 #
 #   You may distribute under the terms of either the GNU General Public
 #   License or the Artistic License, as specified in the Perl README file.
@@ -12,7 +12,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Recordset.pm,v 1.73 2000/09/22 05:34:29 richter Exp $
+#   $Id: Recordset.pm,v 1.102 2001/07/10 03:58:58 richter Exp $
 #
 ###################################################################################
 
@@ -25,8 +25,7 @@ use Carp ;
 
 use DBIx::Database ;
 use DBIx::Compat ;
-
-#use Devel::Peek ;
+use Text::ParseWords ;
 
 use vars 
     qw(
@@ -69,7 +68,7 @@ require Exporter;
 
 @ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.23';
+$VERSION = '0.24';
 
 
 $PreserveCase = 0 ;
@@ -80,6 +79,8 @@ $numOpen = 0 ;
 
 $Debug = 0 ;     # Disable debugging output
 
+# Write Modes
+
 use constant wmNONE   => 0 ;
 use constant wmINSERT => 1 ;
 use constant wmUPDATE => 2 ;
@@ -87,8 +88,16 @@ use constant wmDELETE => 4 ;
 use constant wmCLEAR  => 8 ;
 use constant wmALL    => 15 ;
 
+# required Filters 
+
 use constant rqINSERT => 1 ;
 use constant rqUPDATE => 2 ;
+
+# OnDelete actions
+
+use constant odDELETE => 1 ;
+use constant odCLEAR  => 2 ;
+
 
 %unaryoperators = (
     'is null' => 1,
@@ -125,7 +134,15 @@ sub SetupDBConnection($$$;$$\%)
     {
     my ($self, $data_source,  $table, $username, $password, $attr, $autolink) = @_ ;
 
-    $self->{'*Table'}      = $PreserveCase?$table:lc ($table) ;
+    if ($table =~ /^\"/)
+        {
+        $self->{'*Table'}      = $table ;
+        }
+    else
+        {
+        $self->{'*Table'}      = $PreserveCase?$table:lc ($table) ;
+        }
+
     $self->{'*MainTable'}  = $PreserveCase?$table:lc ($table) ;
     $self->{'*Id'}         = $id++ ;
 
@@ -143,6 +160,7 @@ sub SetupDBConnection($$$;$$\%)
         $self->{'*DBHdl'}      = $data_source->{'*DBHdl'} ;    
         $self->{'*DBIAttr'}    = $data_source->{'*DBIAttr'} ;
         $self->{'*MainHdl'}    = 0 ;
+        $self->{'*TableFilter'}= $data_source->{'*TableFilter'} ;
         }
     elsif (ref ($data_source) eq 'DBIx::Database')
         { # copy from database object
@@ -216,7 +234,8 @@ sub SetupDBConnection($$$;$$\%)
     my $meta = $self -> QueryMetaData ($self->{'*Table'}) ;
     my $metakey    = "$self->{'*DataSource'}//" . $self->{'*Table'} ;
     
-    $self->{'*NullOperator'} = DBIx::Compat::GetItem ($self->{'*Driver'}, 'NullOperator') ;
+    $self->{'*NullOperator'}  = DBIx::Compat::GetItem ($self->{'*Driver'}, 'NullOperator') ;
+    $self->{'*HasInOperator'} = DBIx::Compat::GetItem ($self->{'*Driver'}, 'HasInOperator') ;
 
     $meta or $self -> savecroak ("No meta data available for $self->{'*Table'}") ;
 
@@ -353,7 +372,7 @@ sub SetupMemberVar
 	}
     else
 	{
-	$self -> {$sn} = $default ;
+	$self -> {$sn} ||= $default ;
 	}
     print LOG "DB:  Setup: $pn = " . (defined ($self->{$sn})?$self->{$sn}:'<undef>') . "\n" if ($self -> {'*Debug'} > 2) ;
     }
@@ -405,6 +424,9 @@ sub SetupObject
     my ($class, $parm) = @_ ;
 
     my $self = New ($class, $$parm{'!DataSource'}, $$parm{'!Table'}, $$parm{'!Username'}, $$parm{'!Password'}, $$parm{'!DBIAttr'}) or return undef ; 
+
+
+    HTML::Embperl::RegisterCleanup (sub { $self -> Disconnect }) if (defined (&HTML::Embperl::RegisterCleanup)) ;
 
     $self -> SetupMemberVar ('Debug', $parm, $Debug) ;
     $self -> SetupMemberVar ('Fields', $parm) ;
@@ -1388,7 +1410,8 @@ sub SQLSelect ($;$$$$$$$)
         else
             {
             my $tab4f  = $self -> {'*Table4Field'} ;
-            my @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } split (/\s*,\s*/, $fields) ;
+            #my @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } split (/\s*,\s*/, $fields) ;
+            my @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } quotewords ('\s*,\s*', 0, $fields) ;
             shift @allfields if (lc($allfields[0]) eq 'distinct') ;
             $self->{'*SelectFields'} = \@allfields ;
             }
@@ -1562,7 +1585,7 @@ sub FETCH
         {
 	my $obj ;
 
-        $dat = $data -> [$fetch] ;
+        $dat = $data -> [$fetch] if (!defined ($max) || $fetch <= $max);
 	if (ref $dat eq 'ARRAY')
 	    { # just an Array so tie it now
 	    my $arr = $dat ;	
@@ -1588,6 +1611,30 @@ sub FETCH
 	    $self->{'*LastKey'} = $obj?($obj -> FETCH ($self -> {'*PrimKey'})):undef ;
 	    }
         }
+
+
+        if ($row == $fetch + 1 && !$self->{'*EOD'})
+            {
+            # check if there are more records, if not close the statement handle
+    	    my $arr ;
+            
+            $arr = $sth -> fetchrow_arrayref () if ($sth) ;
+            my $orgrow = $row ;
+
+            if ($arr)
+                {
+                $data->[$row] = [ @$arr ] ;
+		$row++ ;
+                $self->{'*CurrRow'} = $row ;
+                }
+            if ((defined ($max) && $orgrow > $max) || !$arr)
+		{
+		$self->{'*EOD'} = 1 ;
+		$sth -> finish if ($sth) ;
+                print LOG "DB:  Call DBI finish (id=$self->{'*Id'}, LastRow = $row, Last = $self->{'*LastSQLStatement'})\n" if ($self->{'*Debug'} > 3) ;
+                undef $self->{'*StHdl'} ;
+		}
+            }
 
     $self->{'*LastRecord'} = $dat ;
     $self->{'*LastRecordFetch'} = $fetch ;
@@ -1746,14 +1793,16 @@ sub BuildFields
     $numtabs = 2 if (DBIx::Compat::GetItem ($drv, 'SQLJoinOnly2Tabs')) ;
 
 
-    %tables = map { $_ => 1 } split (/\s*,\s*/, $table) ;
+    #%tables = map { $_ => 1 } split (/\s*,\s*/, $table) ;
+    %tables = map { $_ => 1 } quotewords ('\s*,\s*', 0, $table) ;
     $numtabs -= keys %tables ;
 
     #print LOG "###--> numtabs = $numtabs\n" ;
     if (defined ($fields) && !($fields =~ /^\s*\*\s*$/))
         {
-        @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } split (/\s*,\s*/, $fields) ;
-        #print LOG "###allfileds = @allfields\n" ;
+        #@allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } split (/\s*,\s*/, $fields) ;
+        @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } quotewords ('\s*,\s*', 0, $fields) ;
+        #print LOG "###allfields = @allfields\n" ;
 	}
     else
         {
@@ -1850,7 +1899,8 @@ sub BuildFields
     
     if ($leftjoin == 1)
 	{
-	$rtabrel = $table . ' ' . join (' ', map { "left join $_ on $tables{$_}" } keys %tables) ;
+	my @tabs = keys %tables ;
+        $rtabrel = ('(' x scalar(@tabs)) . $table . ' ' . join (' ', map { "left join $_ on $tables{$_})" } @tabs) ;
 	}
     elsif ($leftjoin == 2)
 	{
@@ -1917,7 +1967,7 @@ sub BuildFields
 sub BuildWhere ($$$$)
 
     {
-    my ($self, $where, $xbind_values, $bind_types) = @_ ;
+    my ($self, $where, $xbind_values, $bind_types, $sub) = @_ ;
     
     
     my $expr = '' ;
@@ -1926,6 +1976,7 @@ sub BuildWhere ($$$$)
     my $Debug = $self->{'*Debug'} ;
     my $ignore       = $self->{'*IgnoreEmpty'} ;
     my $nullop       = $self->{'*NullOperator'} ;
+    my $hasIn        = $self->{'*HasInOperator'} ;
     my $linkname     = $self->{'*LinkName'} ;
     my $tab4f        = $self->{'*Table4Field'} ;
     my $type4f       = $self->{'*Type4Field'} ;
@@ -2005,166 +2056,211 @@ sub BuildWhere ($$$$)
             {
             my @multtypes ;
             my @multval ;
-            
+            my $if ;
+
             $type  = substr ($key, 0, 1) || ' ' ;
             $val = undef if ($ignore > 1 && defined ($val) && $val eq '') ;
 
             if ($Debug > 2) { print LOG "DB:  SelectWhere <$key>=<" . (defined ($val)?$val:'<undef>') ."> type = $type\n" ; }
 
-            if (($type =~ /^(\w|\\|\+|\'|\#|\s)$/) && !($ignore && !defined ($val)))
+            $vexp  = '' ;
+            if (substr ($key, 0, 5) eq '$expr')
                 {
-                if ($type eq '+')
-                    { # composite field
+                $vexp = $self -> BuildWhere ($val, $bind_values, $bind_types, 1) if ($val) ;
+                }
+            else
+                {
+                if (($type =~ /^(\w|\\|\+|\'|\#|\s)$/) && !($ignore && !defined ($val)))
+                    {
+                    if ($type eq '+')
+                        { # composite field
                 
-                    if ($Debug > 3) { print LOG "DB:  Composite Field $key\n" ; }
+                        if ($Debug > 3) { print LOG "DB:  Composite Field $key\n" ; }
 
-                    $fconj    = '' ;
-                    $fieldexp = '' ;
-                    @fields   = split (/\&|\|/, substr ($key, 1)) ;
+                        $fconj    = '' ;
+                        $fieldexp = '' ;
+                        @fields   = split (/\&|\|/, substr ($key, 1)) ;
 
-                    $multcnt = 0 ;
-                    foreach $field (@fields)
-                        {
-                        if ($Debug > 3) { print LOG "DB:  Composite Field processing $field\n" ; }
-
-                        if (!defined ($$Quote{$PreserveCase?$field:lc ($field)}))
+                        $multcnt = 0 ;
+                        foreach $field (@fields)
                             {
-                            if ($Debug > 2) { print LOG "DB:  Ignore non existing Composite Field $field\n" ; }
-                            next ;
-                            } # ignore no existent field
+                            if ($Debug > 3) { print LOG "DB:  Composite Field processing $field\n" ; }
 
-                        $op = $$where{"*$field"} || $oper ;
+                            if (!defined ($$Quote{$PreserveCase?$field:lc ($field)}))
+                                {
+                                if ($Debug > 2) { print LOG "DB:  Ignore non existing Composite Field $field\n" ; }
+                                next ;
+                                } # ignore no existent field
 
-                        $field = "$tab4f->{$field}.$field" if ($linkname && !($field =~ /\./)) ;
+                            $op = $$where{"*$field"} || $oper ;
+
+                            $field = "$tab4f->{$field}.$field" if ($linkname && !($field =~ /\./)) ;
+
+                            if (($uright = $unaryoperators{lc($op)}))
+			        {
+    			        if ($uright == 1)
+				    { $fieldexp = "$fieldexp $fconj $field $op" }
+			        else
+				    { $fieldexp = "$fieldexp $fconj $op $field" }
+			        }
+                            elsif ($type eq '\\') 
+                                { $fieldexp = "$fieldexp $fconj $field $op $val" ; }
+                            elsif (defined ($val)) 
+                                { 
+                                $fieldexp = "$fieldexp $fconj $field $op ?" ;
+                                push @multtypes, $type4f -> {$field} ; 
+                                $multcnt++ ;
+                                }
+                            elsif ($op eq '<>')
+                                { $fieldexp = "$fieldexp $fconj $field $nullop not NULL" ; }
+                            else
+                                { $fieldexp = "$fieldexp $fconj $field $nullop NULL" ; }
+
+                        
+                            $fconj ||= $$where{'$compconj'} || ' or ' ; 
+
+                            if ($Debug > 3) { print LOG "DB:  Composite Field get $fieldexp\n" ; }
+
+                            }
+                        if ($fieldexp eq '')
+                            { next ; } # ignore no existent field
+
+                        }
+                    else
+                        { # single field
+                        $multcnt = 0 ;
+                        # any input conversion ?
+		        $if  = $ifunc -> {$PreserveCase?$key:lc ($key)} ; 
+		        ## see bvelow ## $val = &{$if} ($val) if ($if && !ref($val)) ;
+
+                        if ($type eq '\\' || $type eq '#' || $type eq "'")
+                            { # remove leading backslash, # or '
+                            $key = substr ($key, 1) ;
+                            }
+
+                        $lkey = $PreserveCase?$key:lc ($key) ;
+
+                    	        
+		        if ($type eq "'")
+                            {
+                            $$Quote{$lkey} = 1 ;
+                            }
+                        elsif ($type eq '#')
+                            {
+                            $$Quote{$lkey} = 0 ;
+                            }
+
+		        
+		        {
+		        local $^W = 0 ; # avoid warnings
+
+		        #$val += 0 if ($$Quote{$lkey}) ; # convert value to a number if necessary
+		        }
+
+                        if (!defined ($$Quote{$lkey}) && $type ne '\\')
+                            {
+                            if ($Debug > 3) { print LOG "DB:  Ignore Single Field $key\n" ; }
+                            next ; # ignore no existent field
+                            } 
+
+                        if ($Debug > 3) { print LOG "DB:  Single Field $key\n" ; }
+
+                        $op = $$where{"*$key"} || $oper ;
+
+                        $key = "$tab4f->{$lkey}.$key" if ($linkname && $type ne '\\' && !($key =~ /\./)) ;
 
                         if (($uright = $unaryoperators{lc($op)}))
 			    {
-    			    if ($uright == 1)
-				{ $fieldexp = "$fieldexp $fconj $field $op" }
+			    if ($uright == 1)
+			        { $fieldexp = "$key $op" }
 			    else
-				{ $fieldexp = "$fieldexp $fconj $op $field" }
+			        { $fieldexp = "$op $key" }
 			    }
                         elsif ($type eq '\\') 
-                            { $fieldexp = "$fieldexp $fconj $field $op $val" ; }
+                            { $fieldexp = "$key $op $val" ; }
                         elsif (defined ($val)) 
                             { 
-                            $fieldexp = "$fieldexp $fconj $field $op ?" ;
-                            push @multtypes, $type4f -> {$field} ; 
+                            $fieldexp = "$key $op ?" ; 
+                            push @multtypes, $type4f -> {$lkey} ;
                             $multcnt++ ;
                             }
                         elsif ($op eq '<>')
-                            { $fieldexp = "$fieldexp $fconj $field $nullop not NULL" ; }
+                            { $fieldexp = "$key $nullop not NULL" ; }
                         else
-                            { $fieldexp = "$fieldexp $fconj $field $nullop NULL" ; }
-
-                        
-                        $fconj ||= $$where{'$compconj'} || ' or ' ; 
-
-                        if ($Debug > 3) { print LOG "DB:  Composite Field get $fieldexp\n" ; }
-
-                        }
-                    if ($fieldexp eq '')
-                        { next ; } # ignore no existent field
-
-                    }
-                else
-                    { # single field
-                    $multcnt = 0 ;
-                    # any input conversion ?
-		    my $if  = $ifunc -> {$PreserveCase?$key:lc ($key)} ; 
-		    $val = &{$if} ($val) if ($if) ;
-
-                    if ($type eq '\\' || $type eq '#' || $type eq "'")
-                        { # remove leading backslash, # or '
-                        $key = substr ($key, 1) ;
-                        }
-
-                    $lkey = $PreserveCase?$key:lc ($key) ;
-
-                    	    
-		    if ($type eq "'")
-                        {
-                        $$Quote{$lkey} = 1 ;
-                        }
-                    elsif ($type eq '#')
-                        {
-                        $$Quote{$lkey} = 0 ;
-                        }
-
-		    
-		    {
-		    local $^W = 0 ; # avoid warnings
-
-		    #$val += 0 if ($$Quote{$lkey}) ; # convert value to a number if necessary
-		    }
-
-                    if (!defined ($$Quote{$lkey}) && $type ne '\\')
-                        {
-                        if ($Debug > 3) { print LOG "DB:  Ignore Single Field $key\n" ; }
-                        next ; # ignore no existent field
-                        } 
-
-                    if ($Debug > 3) { print LOG "DB:  Single Field $key\n" ; }
-
-                    $op = $$where{"*$key"} || $oper ;
-
-                    $key = "$tab4f->{$lkey}.$key" if ($linkname && $type ne '\\' && !($key =~ /\./)) ;
-
-                    if (($uright = $unaryoperators{lc($op)}))
-			{
-			if ($uright == 1)
-			    { $fieldexp = "$key $op" }
-			else
-			    { $fieldexp = "$op $key" }
-			}
-                    elsif ($type eq '\\') 
-                        { $fieldexp = "$key $op $val" ; }
-                    elsif (defined ($val)) 
-                        { 
-                        $fieldexp = "$key $op ?" ; 
-                        push @multtypes, $type4f -> {$lkey} ;
-                        $multcnt++ ;
-                        }
-                    elsif ($op eq '<>')
-                        { $fieldexp = "$key $nullop not NULL" ; }
-                    else
-                        { $fieldexp = "$key $nullop NULL" ; }
+                            { $fieldexp = "$key $nullop NULL" ; }
 
                     
-                    if ($Debug > 3) { print LOG "DB:  Single Field gives $fieldexp\n" ; }
-                    }
+                        if ($Debug > 3) { print LOG "DB:  Single Field gives $fieldexp\n" ; }
+                        }
     
-    
-                if (!defined ($val))
-                    { @mvals = (undef) }
-                elsif ($val eq '')
-                    { @mvals = ('') }
-                else
-                    { 
-                    if (ref ($val) eq 'ARRAY')
-                        { @mvals = @$val ; }
+                    my @multop ;
+                    @multop = @$op if (ref ($op) eq 'ARRAY') ;
+
+
+                    if (!defined ($val))
+                        { @mvals = (undef) }
+                    elsif ($val eq '')
+                        { @mvals = ('') }
                     else
-                        { @mvals = split (/$mvalsplit/, $val) ; }
+                        { 
+                        if (ref ($val) eq 'ARRAY')
+                            { 
+                            if ($if) 
+                                { @mvals = map { &{$if} ($_) } @$val } 
+                            else
+                                { @mvals = @$val ; }
+                            }
+                        else
+                            {   
+                            if ($if) 
+                                { @mvals = map { &{$if} ($_) } split (/$mvalsplit/, $val) ; } 
+                            else
+                                { @mvals = split (/$mvalsplit/, $val) ; }
+                            }
+                        }
+                    $vconj = '' ;
+                    my $i ;
+
+                    if ($hasIn && @mvals > 1 && !@multop && $op eq '=' && !$$where{'$valueconj'} && $type ne '+')
+                        {
+                        my $j = 0 ;
+                        $vexp = "$key IN (" ;
+                        foreach $val (@mvals)
+                            {
+                            $i = $multcnt ;
+                            push @$bind_values, $val while ($i-- > 0) ;
+                            push @$bind_types, @multtypes ;
+                            $vexp .= $j++?',?':'?' ;
+                            }                
+                        $vexp .= ')' ;
+                        }
+                    else
+                        {
+                        foreach $val (@mvals)
+                            {
+                            $i = $multcnt ;
+                            push @$bind_values, $val while ($i-- > 0) ;
+                            push @$bind_types, @multtypes ;
+                            if (@multop)
+                                { $vexp = "$vexp $vconj ($key " . (shift @multop) . ' ?)' ; }
+                            else
+                                { $vexp = "$vexp $vconj ($fieldexp)" ; }
+                            $vconj ||= $$where{'$valueconj'} || ' or ' ; 
+                            }                
+                    
+                        }
                     }
-                $vexp  = '' ;
-                $vconj = '' ;
-                my $i ;
+                }
 
-                foreach $val (@mvals)
-                    {
-                    $i = $multcnt ;
-                    push @$bind_values, $val while ($i-- > 0) ;
-                    push @$bind_types, @multtypes ;
-                    $vexp = "$vexp $vconj ($fieldexp)" ;
-                    $vconj ||= $$where{'$valueconj'} || ' or ' ; 
-                    }                
-
+            if ($vexp)
+                {
                 if ($Debug > 3) { local $^W = 0 ; print LOG "DB:  Key $key gives $vexp bind_values = <@$bind_values> bind_types=<@$bind_types>\n" ; }
-            
-                $expr = "$expr $econj ($vexp)" if ($vexp) ;
-            
+
+                $expr = "$expr $econj ($vexp)"  ;
+        
                 $econj ||= $$where{'$conj'} || ' and ' ; 
                 }
+
             if ($Debug > 3 && $lexpr ne $expr) { $lexpr = $expr ; print LOG "DB:  expr is $expr\n" ; }
             }
         }
@@ -2174,7 +2270,7 @@ sub BuildWhere ($$$$)
 
     my $tabrel = $self->{'*TabRelation'} ;
 
-    if ($tabrel)
+    if ($tabrel && !$sub)
         {
         if ($expr)
             {
@@ -2314,6 +2410,7 @@ sub Insert ($\%)
     my $Quote = $self->{'*Quote'} ;
     my $ifunc = $self->{'*InputFunctions'} ;
     my $irfunc = $self->{'*InputFunctionsRequiredOnInsert'} ;
+    my $insertserial ;
 
     if ($self -> {'*GetSerialPreInsert'})
         {
@@ -2323,7 +2420,8 @@ sub Insert ($\%)
             { 
             $data -> {$self -> {'*Serial'}} = &{$self -> {'*GetSerialPreInsert'}} ($self -> {'*DBHdl'},
                                                                            $self -> {'*Table'}, 
-                                                                           $self -> {'*Sequence'}) 
+                                                                           $self -> {'*Sequence'}) ;
+            $insertserial = $self -> {'*Serial'} ;
             }
         $self -> {'*LastSerial'} = $data -> {$self -> {'*Serial'}} ;
         }
@@ -2334,6 +2432,7 @@ sub Insert ($\%)
         if (!defined ($val)) 
             { 
             $data -> {$self -> {'*Serial'}} = $self -> {'*SeqObj'} -> NextVal ($self -> {'*Sequence'}) ;
+            $insertserial = $self -> {'*Serial'} ;
             }
         $self -> {'*LastSerial'} = $data -> {$self -> {'*Serial'}} ;
         }
@@ -2359,6 +2458,11 @@ sub Insert ($\%)
             push @bind_types, $type4f -> {$PreserveCase?$key:lc ($key)} ;
             }
         }
+
+    if (@qvals == 1 && $insertserial && exists ($data -> {$insertserial}))
+        { # if the serial is the only value remove if and make no insert
+        @qvals = () ;
+        }    
 
     if ($#qvals > -1)
         {
@@ -2580,6 +2684,100 @@ sub Delete ($$)
     return $newself?*newself:$rc ;
     }
 
+## ----------------------------------------------------------------------------
+##
+## DeleteWithLinks ...
+##
+## $where/\%where = SQL Where condition
+##
+##
+
+sub DeleteWithLinks ($$;$)
+
+    {
+    my ($self, $where, $seen) = @_ ;
+
+    $seen = {} if (ref ($seen) ne 'HASH') ;
+
+    local *newself ;
+    if (!ref ($self)) 
+        {
+        *newself = Setup ($self, $where) ;
+        ($self = $newself) or return undef ;
+        }
+
+    $self -> savecroak ("Delete disabled for table $self->{'*Table'}") if (!($self->{'*WriteMode'} & wmDELETE)) ;
+    
+    my @bind_values ;
+    my @bind_types ;
+    my $expr = $self->BuildWhere ($where,\@bind_values,\@bind_types) ;
+
+    $self -> savecroak ("Clear (Delete all) disabled for table $self->{'*Table'}") if (!$expr && !($self->{'*WriteMode'} & wmCLEAR)) ;
+
+    my $links = $self -> {'*Links'} ;
+
+    my $k ;
+    my $link ;
+    my $od ;
+    my $selected = 0 ;
+
+    foreach $k (keys %$links)
+        {
+        $link = $links -> {$k} ;
+        if ($od = $link -> {'!OnDelete'})
+            {
+            if (!$selected)
+                {
+                my $rc = $self->SQLSelect ($expr, '*', undef, undef, undef, \@bind_values, \@bind_types) ;
+                $selected = 1 ;
+                }
+            
+            $self -> Reset ;
+            my $lf = $link -> {'!LinkedField'} ;
+            my $rec ;
+            while ($rec = $self -> Next)
+                {
+	        my $setup = {%$link} ;
+	        my $mv ;
+	        if (exists ($rec -> {$link -> {'!MainField'}}))
+		    { 
+		    $mv = $rec -> {$link -> {'!MainField'}} ;
+		    }
+	        else
+		    { 
+		    $mv = $rec -> {"$link->{'!MainTable'}.$link->{'!MainField'}"} ;
+		    }
+                $setup -> {'!DataSource'} = $self if (!defined ($link -> {'!DataSource'})) ;
+                print LOG "DB:  DeleteLinks  link = $k  Setup New Recordset for table $link->{'!Table'}, $lf = " . (defined ($mv)?$mv:'<undef>') . "\n" if ($self->{'*Debug'} > 1) ;
+                my $updset = DBIx::Recordset -> Setup ($setup) ;
+
+                if ($od & odDELETE)
+                    {
+                    my $seenkey = "$link->{'!Table'}::$lf::$mv" ;
+                    if (!$seen -> {$seenkey})
+                        {
+                        $seen -> {$seenkey} = 1 ; # avoid endless recursion
+                        $$updset -> DeleteWithLinks ({$lf => $mv}, $seen) ;
+                        }
+                    else
+                        {
+                        print LOG "DB:  DeleteLinks  detected recursion, do not follow link (key=$seenkey)\n" if ($self->{'*Debug'} > 1) ;
+                        }
+                    }
+                elsif ($od & odCLEAR)
+                    {
+                    $$updset -> Update ({$lf => undef}, {$lf => $mv}) ;
+                    }
+                }
+            }
+        }
+
+    $self->{'*LastKey'} = undef ;
+
+    my $rc = $self->SQLDelete ($expr, \@bind_values, \@bind_types) ;
+    return $newself?*newself:$rc ;
+    }
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -2761,7 +2959,7 @@ sub Execute ($\%)
                 return $newself?*newself:$rc ;
                 }
              }
-        $rc = $self -> Delete ($fdat) if (defined ($$fdat{'=delete'}) && $rc eq  '-') ;
+        $rc = $self -> DeleteWithLinks ($fdat) if (defined ($$fdat{'=delete'}) && $rc eq  '-') ;
         $rc = $self -> Search ($fdat) if (!defined ($$fdat{'=empty'}) && defined ($rc)) ;
         $rc = 1 if (defined ($$fdat{'=empty'}) && $rc eq  '-') ;
         }
@@ -2822,7 +3020,7 @@ sub MoreRecords
 
     $self -> PopCurrRec ;
 
-    return $more ;
+    return $more ; # && (ref $more) && keys (%$more) > 0 ;
     }
 
 
@@ -3122,11 +3320,28 @@ sub PreFetch
     my $where = $self -> {'*PreFetch'} ;
     my %keyhash ;
     my $rec ;
+    my $merge = $self -> {'*MergeFunc'}  ;
+    my $pk ;
+
     $rs -> Search ($where eq '*'?undef:$where) or return undef ;
     my $primkey = $rs -> {'*PrimKey'} or $rs -> savecroak ('Need !PrimKey') ;
     while ($rec = $rs -> Next)
         {
-        $keyhash{$rec -> {$primkey}} = $rec ;
+        $pk = $rec -> {$primkey} ;
+        if ($merge && exists ($keyhash{$pk}))
+            {
+            if (tied (%{$keyhash{$pk}}))
+                {
+                my %data = %{$keyhash{$pk}} ;
+                $keyhash{$pk} = \%data ;
+                }
+
+            &$merge ($keyhash{$pk}, $rec) ;
+            }
+        else
+            {
+            $keyhash{$pk} = $rec ;
+            }
         }
     $self -> {'*KeyHash'} = \%keyhash ;
     $self -> {'*ExpiresTime'} = time + $self -> {'*Expires'} if ($self -> {'*Expires'} > 0) ;
@@ -3174,6 +3389,7 @@ sub TIEHASH
                 {
                 '*Expires'   => $arg -> {'!Expires'},
                 '*PreFetch'  => $arg -> {'!PreFetch'},
+                '*MergeFunc' => $arg -> {'!MergeFunc'},
                 } ;
 
         $rs = DBIx::Recordset -> SetupObject ($arg) or return undef ;
@@ -3232,10 +3448,26 @@ sub FETCH
             $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, undef, undef, [$fetch], [$rs->{'*Type4Field'}{$rs->{'*PrimKey'}}]) or return undef ; 
     
             $h = $rs -> FETCH (0) ;
+            my $merge = $self -> {'*MergeFunc'}  ;
+            $self -> {'*LastMergeRec'} = undef ;
+            if ($merge && $rs -> MoreRecords)
+                {
+                my %data = %$h ;
+                my $rec ;
+                my $i = 1 ;
+                while ($rec = $rs -> FETCH($i++))
+                    {
+                    &$merge (\%data, $rec) ;
+                    }
+                $self -> {'*LastMergeRec'} = $h = \%data ;
+                }
             }
         else
             {
-            $h = $rs -> Curr ;
+            if ($self -> {'*LastMergeRec'})
+                { $h = $self -> {'*LastMergeRec'} }
+            else
+                { $h = $rs -> Curr ; }
             }
         }
 
@@ -3262,7 +3494,8 @@ sub STORE
 
     $rs -> savecroak ("Hash::STORE need hashref as value") if (!ref ($value) eq 'HASH') ;
 
-    $rs -> savecroak ("Hash::STORE doesn't work with !PreFetch") if ($self -> {'*PreFetch'}) ;
+    #$rs -> savecroak ("Hash::STORE doesn't work with !PreFetch") if ($self -> {'*PreFetch'}) ;
+    return if ($self -> {'*PreFetch'}) ;
 
     my %dat = %$value ;                 # save values, if any
     $dat{$rs -> {'*PrimKey'}} = $key ;  # setup primary key value
@@ -3583,7 +3816,7 @@ sub FETCH
 		{ 
 		$mv = $dat -> {"$link->{'!MainTable'}.$link->{'!MainField'}"} ;
 		}
-            if ($link -> {'!RowOnly'})
+            if ($link -> {'!UseHash'})
                 {
                 my $linkset = $rs -> {'*LinkSet'}{$key} ;
                 if (!$linkset)
@@ -3618,7 +3851,7 @@ sub FETCH
                     }
                 else
                     {
-                    $linkset -> Reset ;
+                    $$linkset -> Reset ;
                     }
                 $data = $linkset ;
                 }
@@ -3903,7 +4136,9 @@ Takes the same database handle as the given DBIx::Recordset object.
 
 =item DBIx::Database object
 
-Takes Driver/DB/Host from the given database object.
+Takes Driver/DB/Host from the given database object. See L<DBIx::Database> 
+for details about DBIx::Database object. When using more then one Recordset
+object, this is the most efficient method.
 
 =item DBIx::Datasbase object name
 
@@ -4319,6 +4554,24 @@ Only for tieing a hash! If the values is numeric, the prefetched data will be re
 is it is older then the given number of seconds. If the values is a CODEREF the function
 is called and the data is refetched is the function returns true.
 
+=item B<!MergeFunc>
+
+Only for tieing a hash! Gives an reference to an function that is called when more then one
+record for a given hash key is found to merge the records into one. The function receives
+a refence to both records a arguments. If more the two records are found, the function is
+called again for each following record, which is already merged data as first parameter.
+
+ The following example sets up a hash, that, when more then one record with the same id is
+ found, the field C<sum> is added and the first record is returned, where the C<sum> field
+ contains the sum of B<all> found records:
+
+ tie %dbhash, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  'bar',
+                                        '!MergeFunc'    =>  sub { my ($a, $b) = @_ ; $a->{sum} += $b->{sum} ; },
+                                        '!PrimKey'      =>  'id'} ;
+
 =head2 Where Parameters
 
 The following parameters are used to build an SQL WHERE expression
@@ -4416,6 +4669,42 @@ Operator for the named field
 
  Example:
  'value' => 9, '*value' => '>' expand to value > 9
+
+
+Could also be an array ref, so you can pass different operators for the values. This
+is mainly handy when you need to select a range
+
+  Example:
+
+    $set -> Search  ({id          => [5,    7   ],
+                     '*id'        => ['>=', '<='],
+                     '$valueconj' => 'and'})  ;
+
+  This will expanded to "id >= 5 and id <= 7"
+
+NOTE: To get a range you need to specify the C<$valueconj> parameter as C<and> because
+it defaults to C<or>.
+
+=item B<$expr>
+
+B<$expr> can be used to group parts of the where expression for proper priority. To
+specify more the one sub expression, add a numerical index to $expr (e.g. $expr1, $expr2)
+
+  Example:
+
+    $set -> Search  ({id          => 5,
+                     '$expr'      => 
+                        {
+                        'name'  => 'Richter',
+                        'country' => 'de',
+                        '$conj'   => 'or'
+                        }
+                      }) ;
+
+    This will expand to
+
+        (name = 'Richter' or country = 'de') and id = 5
+                     
 
 =head2 Search parameters
 
@@ -4647,6 +4936,19 @@ B<params:> setup (only syntax 1+2), where (only if $where is omitted), fields
 Deletes one or more records from the recordsets table(s).
 
 B<params:> setup (only syntax 1), where
+
+=item B<*set = DBIx::Recordset -E<gt> DeleteWithLinks (\%params)>
+
+=item B<$set -E<gt> DeleteWithLinks (\%params)>
+
+Deletes one or more records from the recordsets table(s).
+Additonal all record of links with have the C<!OnDelete> set, are either
+deleted or the correspending field is set to undef. What to do
+is determinated by the constants C<odDELETE> and C<odCLEAR>. This is
+very helpfull to guaratee the inetgrity of the database.
+
+B<params:> setup (only syntax 1), where
+
 
 
 =item B<*set = DBIx::Recordset -E<gt> Execute (\%params)>
@@ -5186,6 +5488,20 @@ database.  This object detects links between tables and stores this information 
 by the DBIx::Recordset objects. There are additional methods which allow you to add kinds 
 of information which cannot be retreived automatically.
 
+Example:
+
+  $db = DBIx::Database -> new ({'!DataSource'   =>  $DSN,
+		                '!Username'     =>  $User,
+				'!Password'     =>  $Password,
+                                '!KeepOpen'     => 1}) ;
+
+   *set = DBIx::Recordset -> Search ({'!DataSource'   =>  $db,
+			              '!Table'        =>  'foo',
+				     })  ;
+
+
+
+
 =head2 new ($data_source, $username, $password, \%attr, $saveas, $keepopen)
 
 =over 4
@@ -5225,8 +5541,9 @@ need to pass a reference to the DBIx::Database object.
 
 Normaly the database connection will be closed after the metadata has been retrieved from
 the database. This makes sure you don't get trouble when using the new method in a mod_perl
-startup file. You can keep the connection open to use them in further setup call to DBIx::Recordset
-objects.
+startup file. You can keep the connection open to use them in further setup calls to DBIx::Recordset
+objects. When the database is not kept open, you must specify the C<!Password> parameter each
+time the recordset has to be reopend.
 
 =item $tabfilter
 
@@ -5236,11 +5553,18 @@ same as setup parameter !TableFilter
 
 same as setup parameter !DoOnConnect
 
+=item $reconnect
+
+If set, forces I<DBIx::Database> to C<undef> any preexisting database handle and call connect in any
+case. This is usefull in together with I<Apache::DBI>. While the database connection are still kept
+open by I<Apache::DBI>, I<Apache::DBI> preforms a test if the handle is still vaild (which DBIx::Database
+itself wouldn't).
+
 =back
 
 You also can specify a hashref which can contain the following parameters:
 
-!DataSource, !Username, !Password, !DBIAttr, !SaveAs, !KeepOpen, !TableFilter, !DoOnConnect
+!DataSource, !Username, !Password, !DBIAttr, !SaveAs, !KeepOpen, !TableFilter, !DoOnConnect, !Reconnect
 
 
 =head2 $db = DBIx::Database -> DBHdl 
@@ -5341,6 +5665,211 @@ Returns a reference to an array of all fieldtypes for the given table.
 =item $db -> do ($statement, $attribs, \%params)
 
 Same as DBI. Executes a single SQL statement on the open database.
+
+
+
+=head2 $db -> CreateTables ($dbschema, $schemaname, $user, $setpriv, $alterconstraints)
+
+The CreateTables method is used to create an modify the schema of your database. 
+The idea is to define the schema as a Perl data structure and give it to this function,
+it will compare the actual schema of the database with the one provided and creates
+new tables, new fields or drop fields as neccessary. It also sets the permission on the
+tables and is able to create indices for the tables. It will B<never> drop a whole table!
+NOTE: Create tables cannot deteminate changes of the datatype of a fields, because DBI is
+not able to provide this information in a standart way.
+
+=over 4
+
+=item $dbschema
+
+Either the name of a file which contains the schema or a array ref. See below how this
+schema must look like. 
+
+=item $schemaname
+
+schemaname (only used for Oracle)
+
+=item $user
+
+User that should be granted access. See C<!Grant> parameter.
+
+=item $setpriv
+
+If set to true, access privilegs are revoked and granted again for already existing tables.
+That is necessary when C<$user> changes.
+
+=item $alterconstraints
+
+If set to true contrains are cleared/set for already existing fields. DBI doesn't provide a
+database independ way to check which contrains already exists.
+
+=back
+
+=head2 Schema definition
+
+If give as a filename, the file must contain an hash C<%DBDefault> and an array C<@DBSchema>. 
+The first gives default and the second is an array of hashs. Every of this hash defines one
+table.
+
+Example:
+
+  %DBDefault = 
+
+    (
+    '!Grant' => 
+        [
+        'select', 
+        'insert',
+        'update',
+        'delete',
+        ],
+    )
+     ;
+
+
+  @DBSchema = (
+
+    {
+    '!Table' => 'language',
+    '!Fields' => 
+        [
+        'id'            => 'char (2)',
+        'directory'     => 'varchar(40)',
+        'name'          => 'varchar(40)',
+        'europe'        => 'bool', 
+        ],
+    '!PrimKey' => 'id',
+    '!Default' =>
+        {
+        'europe'    => 1,
+        },
+    '!Init' =>
+        [
+        {'id' => 'de', 'directory' => 'html_49', 'name' => 'deutsch'},
+        {'id' => 'en', 'directory' => 'html_76', 'name' => 'english'},
+        {'id' => 'fr', 'directory' => 'html_31', 'name' => 'french'},
+        ],
+   '!Index' =>
+        [
+        'directory' => '',
+        ]
+ 
+    },
+
+  );
+
+The hash which defines a table can have the following keys:
+
+=over 4
+
+=item !Table
+
+Gives the table name
+
+=item !Fields
+
+Array with field names and types. There a some types which a translated
+database specifc. You can define more database specific translation in
+Compat.pm.
+
+=over 4
+
+=item bit
+
+boolean
+
+=item counter
+
+If an autoincrementing integer. For databases (like Oracle) that doesn't have such a 
+datatype a sequence is generated to provide the autoincrement value
+and the fields will be of type integer.
+
+=item tinytext
+
+variables length text with up to 255 characters
+
+=item text
+
+variables length text 
+
+=back
+
+=item !PrimKey
+
+Name of the primary key
+
+=item !For
+
+Can contain the same key as the table definintion, but is only executed for a specifc
+database.
+
+Example:
+
+    '!For' => { 
+        'Oracle' => {
+            '!Constraints' =>
+                {
+                'web_id'           => ['foreign key' => 'REFERENCES web (id)'],
+
+                'prim__menu_id'    => ['!Name'       => 'web_prim_menu_id',
+                                       'foreign key' => 'REFERENCES menu (id)',
+                                       'not null'    => ''],
+                }
+            },
+        },
+
+
+=item !Contraints
+
+Used to define contraints. See example under C<!For>.
+
+=over 4
+
+=item !Name => <name>
+
+=item <constraint> => <second part>
+
+=back
+
+=item !Init
+
+Used to initialy populate the table.
+
+=item !Default
+
+Used to set a default value for a field, when the table is created.
+This doesn't have any affect for further INSERTs/UPDATEs.
+
+=item !Grant
+
+Give the rights that should be grant to C<$user>
+
+=item !Index
+
+Gives the names for the fields for which indices should be created.
+If the second parameter for an index is not empty, it gives the
+index name, otherwise a default name is used.
+
+
+=back
+
+=head2 $db -> DropTables ($schemaname, $user) 
+
+
+Drops B<all> tables. Use with care!
+
+=over 4
+
+=item $schemaname
+
+schemaname (only used for Oracle)
+
+=item $user
+
+User that should be revoked access. See C<!Grant> parameter.
+
+=back
+
 
 =head1 Casesensitive/insensitiv
 

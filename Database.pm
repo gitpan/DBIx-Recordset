@@ -12,7 +12,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Recordset.pm,v 1.73 2000/09/22 05:34:29 richter Exp $
+#   $Id: Database.pm,v 1.18 2001/07/09 19:59:48 richter Exp $
 #
 ###################################################################################
 
@@ -30,6 +30,11 @@ use vars qw{$LastErr $LastErrstr *LastErr *LastErrstr *LastError $PreserveCase} 
 
 
 use Carp ;
+
+use File::Spec ;
+use DBIx::Recordset ;
+use Text::ParseWords ;
+
 
 ## ----------------------------------------------------------------------------
 ##
@@ -195,7 +200,8 @@ sub QueryMetaData($$)
     my $QuoteTypes = DBIx::Compat::GetItem ($drv, 'QuoteTypes') ;
     my $NumericTypes = DBIx::Compat::GetItem ($drv, 'NumericTypes') ;
     my $HaveTypes  = DBIx::Compat::GetItem ($drv, 'HaveTypes') ;
-    my @tabs = split (/\s*\,\s*/, $table) ;
+    #my @tabs = split (/\s*\,\s*/, $table) ;
+    my @tabs = quotewords ('\s*,\s*', 1, $table) ;
     my $tab ;
     my $ltab ;
     my %Quote ;
@@ -211,8 +217,15 @@ sub QueryMetaData($$)
         {
         next if ($tab =~ /^\s*$/) ;
     
-        $sth = &{$ListFields}($hdl, $tab) or carp ("Cannot list fields for $tab ($DBI::errstr)") ;
-	$ltab = $tab ;
+        eval {
+            $sth = &{$ListFields}($hdl, $tab) or carp ("Cannot list fields for $tab ($DBI::errstr)") ;
+            } ;
+        next if ($@) ; # ignore any table for which we can't get fields
+
+	if ($tab =~ /^"(.*?)"$/)
+            { $ltab = $1 ; }
+        else
+            { $ltab = $tab ; }
 	
         my $types ;
         my $fields = $sth?$sth -> FETCH ($PreserveCase?'NAME':'NAME_lc'):[]  ;
@@ -457,7 +470,16 @@ package DBIx::Database ;
 
 use strict 'vars' ;
 
-use vars qw{$LastErr $LastErrstr *LastErr *LastErrstr *LastError $PreserveCase @ISA} ;
+use vars (
+    '%DBDefault',   # DB Shema default für alle Tabellen 
+    '@DBSchema',     # DB Shema definition
+    '$LastErr',
+    '$LastErrstr',
+    '*LastErr',
+    '*LastErrstr',
+    '*LastError',
+    '$PreserveCase',
+    '@ISA') ;
 
 @ISA = ('DBIx::Database::Base') ;
 
@@ -527,16 +549,17 @@ sub connect
 sub new
 
     {
-    my ($class, $data_source, $username, $password, $attr, $saveas, $keepopen, $tabfilter, $doonconnect) = @_ ;
+    my ($class, $data_source, $username, $password, $attr, $saveas, $keepopen, $tabfilter, $doonconnect, $reconnect) = @_ ;
     
-
     if (ref ($data_source) eq 'HASH')
         {
         my $p = $data_source ;
-        ($data_source, $username, $password, $attr, $saveas, $keepopen, $tabfilter, $doonconnect) = 
-        @$p{('!DataSource', '!Username', '!Password', '!DBIAttr', '!SaveAs', '!KeepOpen', '!TableFilter', '!DoOnConnect')} ;
+        ($data_source, $username, $password, $attr, $saveas, $keepopen, $tabfilter, $doonconnect, $reconnect) = 
+        @$p{('!DataSource', '!Username', '!Password', '!DBIAttr', '!SaveAs', '!KeepOpen', '!TableFilter', '!DoOnConnect', '!Reconnect')} ;
         }
             
+    $LastErr	= undef ;
+    $LastErrstr = undef ;
     
     my $metakey  ;
     my $self ;
@@ -545,6 +568,7 @@ sub new
         {
         $metakey    = "-DATABASE//$1"  ;
         $self = $DBIx::Recordset::Metadata{$metakey} ;
+        $self->{'*DBHdl'} = undef if ($reconnect) ;
         $self -> connect ($password) if ($keepopen && !defined ($self->{'*DBHdl'})) ;
         return $self ;
         }
@@ -554,6 +578,7 @@ sub new
         $metakey    = "-DATABASE//$saveas"  ;
         if (defined ($self = $DBIx::Recordset::Metadata{$metakey}))
             {
+            $self->{'*DBHdl'} = undef if ($reconnect) ;
             $self -> connect ($password) if ($keepopen && !defined ($self->{'*DBHdl'})) ;
             return $self ;
             }
@@ -572,6 +597,7 @@ sub new
     bless ($self, $class) ;
 
     my $hdl ;
+    $self->{'*DBHdl'} = undef if ($reconnect) ;
 
     if (!defined ($self->{'*DBHdl'}))
         {
@@ -884,6 +910,571 @@ sub DESTROY
     }
 
 
+## ---------------------------------------------------------------------------------
+##
+## Datenbank Erzeugen
+##
+##   in $dbschema    Schema file or ARRAY ref
+##   in $shema      schema name (Oracle)
+##   in $user       user to grant rights to
+##   in $setpriv    resetup privileges
+##   in $alterconstraints resetup constraints (-1 to drop containts)
+##
+
+   
+sub CreateTables
+
+    {
+    #my $DataSource  = shift ;
+    #my $setupuser   = shift ;
+    #my $setuppass   = shift ;
+    #my $tabprefix   = shift ;
+    my $db          = shift ; 
+    my $dbschema     = shift ;
+    my $shema       = shift ;
+    my $user        = shift ;
+    my $setpriv     = shift ;
+    my $alterconstraints   = shift ;
+
+    my $DBSchemaRef ;
+
+    print "\nDatenbanktabellen anlegen/aktualisierien:\n" ;
+
+    if (ref ($dbschema) eq 'ARRAY')
+        {
+        $DBSchemaRef = $dbschema ;
+        }
+    else
+        {
+        open FH, $dbschema or die "Schema nicht gefunden ($dbschema) ($!)" ;
+            {
+            local $/ = undef ;
+            my $shema = <FH> ;
+            $shema =~ /^(.*)$/s ; # untaint
+            $shema = $1 ;
+            eval $shema ;
+            die "Fehler in $dbschema: $@" if ($@) ;
+            }
+        close FH ;
+        $DBSchemaRef = \@DBSchema ;
+        }
+
+
+    #my $db = DBIx::Database -> new ({'!DataSource' => "$DataSource",
+    #                                 '!Username'   => $setupuser,
+    #                                 '!Password'   => $setuppass,
+    #                                 '!KeepOpen'   => 1,
+    #                                 '!TableFilter' => $tabprefix}) ;
+    #  
+    #die DBIx::Database->LastError . "; Datenbank muß bereits bestehen" if (DBIx::Database->LastError) ;
+    #  
+    
+    my $dbh = $db -> DBHdl ;
+    local $dbh -> {RaiseError} = 0 ;
+    local $dbh -> {PrintError} = 0 ;
+    
+    my $tables = $db -> AllTables ;
+
+   
+    my $tab ;
+    my $tabname ;
+    my $type ;
+    my $typespec ;
+    my $size ;
+
+    my $public = defined ($user) && $db -> {'*Username'} ne $user ;
+    my $drv          = $db->{'*Driver'} ;
+    my $tabprefix    = $db -> {'*TableFilter'} ;
+    my $trans = DBIx::Compat::GetItem ($drv, 'CreateTypes') ; 
+    $trans = {} if (!$trans) ;
+    my $createseq = DBIx::Compat::GetItem ($drv, 'CreateSeq') ; 
+    my $createpublic = $public && DBIx::Compat::GetItem ($drv, 'CreatePublic') ; 
+    my $candropcolumn = DBIx::Compat::GetItem ($drv, 'CanDropColumn') ; 
+    my $i ;
+    my $field ;
+    my $cmd ;
+
+
+    foreach $tab (@$DBSchemaRef)
+        {
+        my $newtab = 0 ;
+        my $newseq = 0 ;
+        my $hasseq = 0 ;
+        my %tabdef = (%DBDefault, %$tab, %{$tab -> {'!For'} -> {$drv} || {}}) ;
+        $tabname = "$tabprefix$tabdef{'!Table'}" ;
+        my $init = $tabdef{'!Init'} ;
+        my $grant = (defined ($user) && $db -> {'*Username'} ne $user)?$tabdef{'!Grant'}:undef ;
+        my $constraint  ;
+        my $constraints = $tabdef{'!Constraints'} ;
+        my $default = $tabdef{'!Default'} ;
+        my $pk   = $tabdef{'!PrimKey'} ;
+        my $index= $tabdef{'!Index'} ;
+        my $c ;
+        my $ccmd ;
+        my $cname ;
+        my $cval ;
+        my $ncnt ;
+        if ($tables -> {$tabname})
+            {
+            printl ("$tabname", LL, "vorhanden\n") ;
+
+            my $fields = $tabdef{'!Fields'} ;
+            my $dbfields = $db -> AllNames ($tabname) ;
+            my %dbfields = map { $_ => 1 } @$dbfields ;
+            my $lastfield ;
+            for ($i = 0; $i <= $#$fields; $i+= 2)
+                {
+                $field    = lc ($fields -> [$i]) ;
+                $typespec = $fields -> [$i+1] ;
+                $hasseq = 1 if ($createseq && $typespec eq 'counter') ;
+                
+                $ccmd = '' ;
+                $ncnt = 0 ;
+                if ($constraints && ($constraint = $constraints -> {$field}))
+                    {
+                    $cname = "${tabname}_$field" ;
+                    for ($c = 0 ; $c < $#$constraint; $c+=2)
+                        {
+                        if ($constraint -> [$c] eq '!Name')
+                            {
+                            $cname = $tabprefix . $constraint -> [$c+1] ;
+                            $ncnt = 0 ;
+                            next ;
+                            }
+                        $ncnt++ ;
+                        $cval = $constraint -> [$c+1] || $constraint -> [$c] ;        
+                        $cval =~ s#REFERENCES\s+(.*?)\s*\(#REFERENCES $tabprefix$1 (#i ;
+                        $ccmd .= " CONSTRAINT $cname" . ( $ncnt >1?$ncnt:'') . " $cval" ;
+                        }
+                    }
+
+
+                if (!$dbfields{$field})
+                    {
+                    printl ("   Add $field", LL) ;
+                    $newseq = 1 if ($createseq && $typespec eq 'counter') ;
+             
+                    if ($typespec =~ /^(.*?)\s*\((.*?)\)(.*?)$/)
+                        {
+                        $type = $trans->{$1}?$trans->{$1}:$1 . "($2) $3" ;
+                        }
+                    else
+                        {
+                        $type = $typespec ;
+                        $type = $trans -> {$typespec} if ($trans -> {$typespec}) ;
+                        }
+                    $cmd = "ALTER TABLE $tabname ADD $field $type $ccmd" . ($lastfield?" AFTER $lastfield":'') ;            
+
+                    $db -> do ($cmd) ;
+
+                    die "Fehler beim Erstellen des Feldes $tabname.$field:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                    
+                    print "ok\n" ;
+                    
+                    if ($init || $default)
+                        {
+                        printl ("   $field initialisieren", LL) ;
+
+                        $db -> MetaData ($tabname, undef, 1) ;
+
+                        my $rs = DBIx::Recordset -> Setup ({'!DataSource' => $db, '!Table' => $tabname, '!PrimKey' => $tabdef{'!PrimKey'}}) ;
+                        die "Fehler beim Setup von Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+
+                        my $rec ;
+                        if ($default && defined ($default -> {$field}))
+                            {
+                            $$rs -> Update ({$field, $default -> {$field}}, "$field is null") ;
+                            die "Fehler beim Update in Tabelle $tabname:\n" . $$rs -> LastSQLStatement . "\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                            }
+
+                        if ($init)
+                            {
+                            foreach $rec (@$init)
+                                {
+                                $$rs -> Update ({$field, $rec -> {$field}}, {$pk => $rec -> {$pk}}) ;
+                                die "Fehler beim Update in Tabelle $tabname:\n" . $$rs -> LastSQLStatement . "\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                                }
+                            }
+                        print "ok\n" ;
+                        }
+                    }
+                elsif ($alterconstraints && $ccmd)
+                    {
+                    printl ("   Alter Constraint $field", LL) ;
+
+                    $ccmd = '' ;
+                    $ncnt = 0 ;
+                    if ($constraints && ($constraint = $constraints -> {$field}))
+                        {
+                        $cname = "${tabname}_$field" ;
+                        for ($c = 0 ; $c < $#$constraint; $c+=2)
+                            {
+                            if ($constraint -> [$c] eq '!Name')
+                                {
+                                $cname = $tabprefix . $constraint -> [$c+1] ;
+                                $ncnt = 0 ;
+                                next ;
+                                }
+                            $ncnt++ ;
+                            $ccmd = " CONSTRAINT $cname" . ( $ncnt>1?$ncnt:'')  ;
+                            $cmd = "ALTER TABLE $tabname DROP $ccmd"  ;            
+
+                            $db -> do ($cmd) ;
+
+                            #die "Fehler beim Erstellen des Feldes $tabname.$field:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+
+                            if ($alterconstraints > 0)
+                                {
+                                $cval = $constraint -> [$c] ;
+                                if (lc ($cval) eq 'null' || lc ($cval) eq 'not null')
+                                    {
+                                    $cmd = "ALTER TABLE $tabname MODIFY $field $ccmd $cval" ;            
+                                    }
+                                else
+                                    {
+                                    $cval .= " ($field) " . $constraint -> [$c+1] ;        
+                                    $cval =~ s#REFERENCES\s+(.*?)\s*\(#REFERENCES $tabprefix$1 (#i ;
+
+                                    $cmd = "ALTER TABLE $tabname ADD $ccmd $cval" ;            
+                                    }
+                                $db -> do ($cmd) ;
+                                die "Fehler beim Ändern des Constraints des Feldes $tabname.$field:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                                }
+                            }
+                        }
+
+                    
+                    print "ok\n" ;
+                    }
+
+                $dbfields{$field} = 2 ;
+                }
+            if ($candropcolumn)
+                {
+                while (($field, $i) = each (%dbfields))
+                    {
+                    if ($i == 1)
+                        {
+                        printl ("   Drop $field", LL) ;
+             
+                        $cmd = "ALTER TABLE $tabname DROP $field" ;            
+                        $db -> do ($cmd) ;
+
+                        die "Fehler beim Entfernen des Feldes $tabname.$field:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                    
+                        print "ok\n" ;
+                        }
+                    }
+                }
+            }
+        else
+            {
+            printl ("$tabname erstellen", LL) ;
+
+            my $cmd = "CREATE TABLE $tabname (" ;
+            $newtab = 1 ;
+            
+            my $fields = $tabdef{'!Fields'} ;
+            for ($i = 0; $i <= $#$fields; $i+= 2)
+                {
+                $field    = lc($fields -> [$i]) ;
+                $typespec = $fields -> [$i+1] ;
+                $hasseq = $newseq = 1 if ($createseq && $typespec eq 'counter') ;
+             
+                if ($typespec =~ /^(.*?)\s*\((.*?)\)(.*?)$/)
+                    {
+                    $type = $trans -> {$1}?$trans -> {$1}:$1 . "($2) $3" ;
+                    }
+                else
+                    {
+                    $type = $typespec ;
+                    $type = $trans -> {$typespec} if ($trans -> {$typespec}) ;
+                    }
+
+                $ccmd = '' ;
+                $ncnt = 0 ;
+                if ($constraints && ($constraint = $constraints -> {$field}))
+                    {
+                    $cname = "${tabname}_$field" ;
+                    for ($c = 0 ; $c < $#$constraint; $c+=2)
+                        {
+                        if ($constraint -> [$c] eq '!Name')
+                            {
+                            $cname = $tabprefix . $constraint -> [$c+1] ;
+                            $ncnt = 0 ;
+                            next ;
+                            }
+                        $ncnt++ ;
+                        $cval = $constraint -> [$c+1] || $constraint -> [$c] ;        
+                        $cval =~ s#REFERENCES\s+(.*?)\s*\(#REFERENCES $tabprefix$1 (#i ;
+                        $ccmd .= " CONSTRAINT $cname" . ( $ncnt >1?$ncnt:'') . " $cval" ;
+                        }
+                    }
+
+
+                $cmd .= "$field $type $ccmd" ;
+                $cmd .=  ($i == $#$fields - 1?' ':', ') ;            
+                }
+
+            $cmd .=  ", PRIMARY KEY ($tabdef{'!PrimKey'})" if ($tabdef{'!PrimKey'}) ;
+            $cmd .=  ')' ;
+
+            $db -> do ($cmd) ;
+
+            die "Fehler beim Erstellen der Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+
+            print "ok\n" ;
+
+            if ($init)
+                {
+                printl ("$tabname initialisieren", LL) ;
+                    
+                my $rs = DBIx::Recordset -> Setup ({'!DataSource' => $db, '!Table' => $tabname, '!PrimKey' => $tabdef{'!PrimKey'}}) ;
+                die "Fehler beim Setup von Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+
+                my $rec ;
+                foreach $rec (@$init)
+                    {
+                    my %dat ;
+                    if ($default) 
+                        {
+                        %dat = (%$default, %$rec) ;
+                        }
+                    else
+                        {
+                        %dat = %$rec ;
+                        }
+                    
+                    $$rs -> Insert (\%dat) ;
+                    die "Fehler beim Insert in Tabelle $tabname:\n" . $$rs -> LastSQLStatement . "\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                    }
+                print "ok\n" ;
+                }
+            }
+
+    
+        if ($index)
+            {
+            printl ("$tabname index erstellen", LL) ;
+
+            my $i ;
+            for ($i = 0; $i <= $#$index; $i+= 2)
+                {
+                my $field    = lc($index -> [$i]) ;
+                my $name     = "${tabname}_${field}_ndx" ;
+                my $attr     = $index -> [$i+1] ;
+                if (ref($attr) eq 'HASH')
+                    {
+                    $name = "$tabprefix$attr->{Name}" ;
+                    $attr = $attr -> {Attr} ;
+                    }
+                
+                my $cmd      = "CREATE $attr INDEX $name ON $tabname ($field)" ;                 
+                $db -> do ($cmd) ; 
+                die "Fehler beim Erstellen des Indexes für $field:\n$cmd\n" . DBIx::Database->LastError  if ($newtab && DBIx::Database->LastError) ;
+                }
+            print "ok\n" ;
+            }
+
+
+        if ($grant && ($newtab || $setpriv))
+            {
+            if ($createpublic)
+
+                {
+                printl ("public synonym für $tabname erstellen", LL) ;
+
+                if ($setpriv && !$newtab)
+                    {
+                    my $cmd = "DROP PUBLIC SYNONYM $tabname " ;
+                    $db -> do ($cmd) ;
+                    }
+
+                my $cmd = "CREATE PUBLIC SYNONYM $tabname FOR $shema.$tabname" ;
+                $db -> do ($cmd) ;
+                die "Fehler beim Erstellen von public Synonym $tabname:\n$cmd\n" . DBIx::Database->LastError  if ($newtab && DBIx::Database->LastError) ;
+
+                print "ok\n" ;
+                }
+            printl ("$tabname Berechtigungen setzen", LL) ;
+            
+            if ($setpriv && !$newtab)
+                {
+                my $cmd = "REVOKE all ON $tabname FROM $user" ;
+                $db -> do ($cmd) ;
+                warn "Fehler beim Entziehen der Berechtigungen für  Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                }
+
+            $cmd = 'GRANT ' . join (',', @$grant) . " ON $tabname TO $user" ;                     
+            $db -> do ($cmd) ;
+            die "Fehler beim Setzen der Berechtigungen für  Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+
+            print "ok\n" ;
+            }
+
+        if ($hasseq)
+            {
+            $tabname = "${tabname}_seq" ;
+
+            if ($newseq)
+                {
+                printl ("$tabname erstellen", LL) ;
+
+                my $cmd = "CREATE SEQUENCE $tabname " ;
+                $db -> do ($cmd) ;
+
+                die "Fehler beim Erstellen von Sequenz $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                print "ok\n" ;
+                }
+
+            if ($grant && ($newseq || $setpriv))
+                {
+                if ($createpublic)
+
+                    {
+                    printl ("public synonym für $tabname erstellen", LL) ;
+
+                    if ($setpriv && !$newseq)
+                        {
+                        my $cmd = "DROP PUBLIC SYNONYM $tabname " ;
+                        $db -> do ($cmd) ;
+                        }
+
+                    my $cmd = "CREATE PUBLIC SYNONYM $tabname FOR $shema.$tabname" ;
+                    $db -> do ($cmd) ;
+
+                    die "Fehler beim Erstellen von public Synonym $tabname:\n$cmd\n" . DBIx::Database->LastError  if ($newseq && DBIx::Database->LastError) ;
+                    print "ok\n" ;
+                    }
+
+                printl ("$tabname Berechtigungen setzen", LL) ;
+         
+                if ($setpriv && !$newseq)
+                    {
+                    my $cmd = "REVOKE all ON $tabname FROM $user" ;
+
+                    $db -> do ($cmd) ;
+                    warn "Fehler beim Entziehen der Berechtigungen für  Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                    }
+
+                $cmd = "GRANT select ON $tabname TO $user" ;                     
+                $db -> do ($cmd) ;
+                die "Fehler beim Setzen der Berechtigungen für  Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+                print "ok\n" ;
+
+                }
+            }
+        }
+    }
+
+## ---------------------------------------------------------------------------------
+##
+## Datenbank Tabellen entfernen
+##
+##   in $shema      schema name (Oracle)
+##   in $user       user to revoke rights from
+##
+
+    
+sub DropTables
+
+    {
+    #my $DataSource  = shift ;
+    #my $setupuser       = shift ;
+    #my $setuppass       = shift ;
+    #my $tabprefix       = shift ;
+    my $db              = shift ; 
+    my $shema           = shift ;
+    my $user            = shift ;
+
+    print "\nDatenbank Tabellen entfernen:\n" ;
+
+    #my $db = DBIx::Database -> new ({'!DataSource' => "$DataSource",
+    #                                 '!Username'   => $setupuser,
+    #                                 '!Password'   => $setuppass,
+    #                                 '!KeepOpen'   => 1,
+    #                                 '!TableFilter' => $tabprefix}) ;
+    #
+    #die DBIx::Database->LastError . "; Datenbank muß bereits bestehen" if (DBIx::Database->LastError) ;
+
+    my $tables = $db -> AllTables ;
+
+    
+    my $tab ;
+    my $tabname ;
+    my @seq ;
+    my $cmd ;
+
+    my $public = defined ($user) && $db -> {'*Username'} ne $user ;
+
+    my $drv          = $db->{'*Driver'} ;
+    my $tabprefix    = $db -> {'*TableFilter'} ;
+    my $createseq    = DBIx::Compat::GetItem ($drv, 'CreateSeq') ; 
+    my $createpublic = $public && DBIx::Compat::GetItem ($drv, 'CreatePublic') ; 
+
+    foreach $tabname (keys %$tables)
+        {
+        printl ("$tabname entfernen", LL) ;
+
+        if ($createpublic)
+            {
+            my $cmd = "DROP PUBLIC SYNONYM $tabname " ;
+
+            $db -> do ($cmd) ;
+            }
+
+        #push @seq, $tabname if ($createseq && $typespec eq 'counter') ;
+ 
+        $cmd = "DROP TABLE $tabname" ;            
+
+        $db -> do ($cmd) ;
+
+        $db -> MetaData ($tabname, undef, 1) ;
+        $tables -> {$tabname} = 0 ;
+
+        die "Fehler beim Entfernen der Tabelle $tabname:\n$cmd\n" . DBIx::Database->LastError  if (DBIx::Database->LastError) ;
+        
+        print "ok\n" ;
+
+        if ($createseq)
+            {
+            $tabname = "${tabname}_seq" ;
+
+            #printl ("$tabname erstellen", LL) ;
+
+            my $cmd = "DROP SEQUENCE $tabname " ;
+
+            $db -> do ($cmd) ;
+
+            if ($createpublic)
+                {
+                my $cmd = "DROP PUBLIC SYNONYM $tabname " ;
+
+                $db -> do ($cmd) ;
+                }
+            }
+        }
+    }
+
+## ---------------------------------------------------------------------------------
+##
+## Output with fixed length
+##
+##   in	$txt    Text
+##   in	$length Length
+##   in	$txt2   Weiterer Text
+##
+
+
+sub printl
+
+    {
+    my ($txt, $length, $txt2) = @_ ;
+
+    print $txt, ' ' x ($length - length($txt)), ' ', $txt2 ;
+    } ;
+
+
 ###################################################################################
 
 1;
@@ -902,6 +1493,7 @@ DBIx::Database / DBIx::Recordset - Perl extension for DBI recordsets
 =head1 DESCRIPTION
 
 See perldoc DBIx::Recordset for an description.
+
 
 =head1 AUTHOR
 

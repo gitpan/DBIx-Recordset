@@ -186,7 +186,7 @@ as above (except that we are now dealing with two tables instead of one):
   [-
   use DBIx::Recordset ;
   $db = DBIx::Database -> new ('dbi:mysql:test') ;
-  $db -> TableAttr ('ort', '!NameField', 'town') ;
+  $db -> TableAttr ('town', '!NameField', 'town') ;
 
   $fdat{'!DataSource'} = $db ;
   $fdat{'!LinkName'} = 3 ;

@@ -27,6 +27,17 @@ if (-e $configfile)
     do $configfile ;
     }
 
+## ----------------------------------------------------------------------------
+
+sub MY::test_via_script 
+	{
+	my ($txt) = shift -> MM::test_via_script (@_) ;
+
+	$txt =~ s/\$\(TEST_FILE\)/\$(TEST_FILE) \$(TESTARGS)/g ;
+
+	return $txt ;
+	}
+	
 
 ## ----------------------------------------------------------------------------
 

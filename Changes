@@ -1,5 +1,33 @@
 Revision history for Perl extension DBIx::Recordset
 
+
+0.24 10. July 2001
+
+  - Added Code to DBIx::Database to Create/Modify/Drop tables
+    See CreateTables/DropTables
+  - *fieldname can take an array ref, to specify different
+    operators for multiple values which should compared to the same
+    field. This is handy for selecting a range.
+  - Filters are correctly apply if a arrayref with multiple value
+    are passed to a SELECT.
+  - Reset error code and string in DBIx::Database -> new
+  - If an array of values id passed in for one field and the operator
+    is '=' now the IN sql operator is used, instead of a set of '='.
+  - Set Postgres type 1005 to not numeric. Spotted by Michael Maruka.
+  - Ignore errors in ListFields when retrieving metadata for a table.
+  - Statement handle is closed as soon as possible, to avoid out of
+    cursors situations.
+  - new parameter $expr allow to group multiple sub expressions in 
+    a sql where, therefore allowing more complex conditions.
+  - Added new parameter !MergeFunc which allow to specify a function
+    that is called, when multiple records with the same key are found
+    in a DBIx::Recordset::Hash object.
+  - Added some code to handle table- and fieldnames which include
+    spaces and special charaters. This is still experimental.
+  - Fixed problem with !TableFilter setup
+  - Set correct brackets when creating an left outer join. This is necessary
+    for some database to join more the two tables.
+
 0.23  22. Sept 2000
 
   - separated DBIx base classes in different files, so they are visible and
@@ -158,32 +186,18 @@ Revision history for Perl extension DBIx::Recordset
   - DBIx::Recordset::Row::Flush make sure that exactly one row is updated. Based
     on a patch from Alexander Smishlajev.
   - By setting $FetchsizeWarn to zero, you can now make DBIx::Recordset return
-
     the value of $sth -> rows, when the FETCHSIZE method is called by Perl.
-
     This feature is still experimental, because I don't what different DBMS
-
     returns in $sth -> rows, after an SELECT. Patch from Robert.
-
   - By setting $PreserveCase, you can cause DBIx::Recordset to _not_ translate all
-
     names to lowercase. Per default DBIx::Recordset translates all names (tablenames/
-
     fieldnames) to lowercase to let application work with different DBMS.
-
   - Updated docs of DBIx::Compat.
-
   - If the DBMS supports it, DBIx::Recordset will use the LIMIT/OFFSET keywords if you
-
     only want to fetch a limited number of row from the database (for parameters 
-
     $start and $max). Patch from Robert.
-
   - Added an indroduction to DBIx::Recordset (based on my talk on the 1999 Perl conference)
-
     which is viewable with perldoc Intrors.pod
-
-
 
 
 0.19  30 Mar 1999

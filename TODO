@@ -21,6 +21,8 @@ Features
 
 - Do not insert empty numeric fields [Robert 1.5.00]
 
+- arrayref for tabreleation [Jason R.Smith 18.3.01]
+
 Bugs
 ----
 
