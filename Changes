@@ -1,5 +1,67 @@
 Revision history for Perl extension DBIx::Recordset
 
+0.19  30 Mar 1999
+
+  - changed order of group by and order by in select. Spotted by
+    Roman Maeder.
+  - DBIx::Recordset automaticly tried to determinated links between
+    tables (see also DBIx::Database)
+  - DBIx::Recordset will only insert a new record in the DB if
+    a record contains any data. This avoids inserting a record
+    that is only created when try to read an non existent record.   
+  - Added new attribute !WriteMode which lets you specify which
+    write operation to the db are permited and which are not.
+  - Added new attribute '!LinkName' which will automaticly select
+    additional fields from links tables (DBMS must support LEFT JOIN)
+  - Fixed a problem that occurs in cleanup when you use muliple
+    nested links. (while (($k, $v) = each (%h)) is not reentrant!!)
+  - Execute will not do a Search after INSERT/UPDATE/DELETE when an
+    error has occured, so the error message is not overwritten
+  - use croak instead of die
+  - SQLDelete accepts empty WHERE, which will delete the whole table
+  - Added new object DBIx::Database which will parse the metadata of
+    the database and tried to automaticly determinate links between tables.
+    All the information is stored for later access by DBIx::Recordset
+    objects. This makes setup of a DBIx::Recordset object much faster,
+    especially when you use it in the startup file of your web server.
+    Also this gives you the possibility to speficy table attributes
+    only once at startup time.
+  - New method Links return the links of a DBIx::Recordset object
+  - New method Link4Field return the link of the specified field if any.
+  - tied hash now also support DELETE and CLEAR operation on a table.
+  - Insert now skips undef values, because there is no need to insert
+    NULL values.
+  - Update now set undef to NULL, even for database that does not use
+    placeholders.
+  - Added Filters. Filters allows you to specify an input and/or an
+    output function which transforms the correspondig fields before
+    input/output. This could for example be used to transform database
+    specific datatypes (e.g. date) to and from a common format, or just
+    to a human readable format.
+  - Fieldnames which are given to Update and Insert maybe prefixed with a
+    \ to avoid any transformation. Suggested by Frank Ridderbusch.
+  - Update and Insert converts numeric values to vaild numeric format, e.g.
+    'foo' will be converted to 0 when inserting in an integer field. Use
+    '\name' => 'foo' to avoid this conversion.
+  - 'null' and 'not null' now allowed as unary operators in where expression.
+    Suggested by Malcolm Cook.
+  - An value of undef is now allowed as key for the hash access. This is
+    usefull when your primary key is an autoincrement value. Then you can
+    add data with undef as key and call Flush to write out the record.
+  - automaticly finish a statement handle, when all data is fetched to
+    avoid unneccesaary open statement handles.
+  - Make all the new features are working with DBD::Orcale. Many thanks
+    to John Tobey for his help.
+  - Adapted Compat.pm entries for DBD::Sybase. Help and testing from
+    Malcolm Cook and Aaron Ross.
+  - $DBIx::Recordset::Debug now allows more values, so you can better
+    control what's being logged.
+  - Added !LongNames parameter which forces the hash keys to the form
+    table.field.
+  - Added methods for begin/commit/rollback to make sure DBIx::Recordset
+    internal data are correctly updated. Suggested by John Tobey.
+
+
 0.18  3 Nov 1998 
   - Added !TabJoin parameter to support LEFT/RIGTH/INNER JOIN
     syntax. Spotted by Roman Maeder.

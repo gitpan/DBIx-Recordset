@@ -5,30 +5,27 @@ Features
 
 - Recheck selected values before UPDATE
 
-- Support cursors, to fetech only those data which is absolutly necessary
-
-- Support for DBD::Oracle [Malcom Cook]
-
-- left joins and other select parameters
+- Support cursors, to fetch only those data which is absolutly necessary
 
 - Support for FETCHSIZE [Malcom Cook]
 
+- quote date types
+
+- ::Hash -> New record, then retrieve autoincrement value -> force reselect?
+
 Bugs
 ----
-- Sub Select with NULL as argument, return all rows instead of none [Roman Maeder]
+- first time access of linked oject in form $set{-to}[$row]{name}
+  $set{-to}[row] returns undef
+
+- INSERT $rc = undef -> $rc = 1 -> mult linked nested objects (ka aktuell)
 
 Tests
 -----
-- DBD::Solid -> modify inside sub table
-
-- DBD::Oracle -> TYPE 
-
 
 Doku 
 ----
 
-- !TabJoin
-- $group
-- $append
-
+  - Delete
+  - Clear
 

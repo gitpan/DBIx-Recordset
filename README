@@ -1,11 +1,10 @@
 
 DBIx::Recordset - Perl extension for DBI recordsets
 
-Copyright (c) 1997-1998 Gerald Richter / ECOS
+Copyright (c) 1997-1999 Gerald Richter / ECOS
 
 You may distribute under the terms of either the GNU General Public 
 License or the Artistic License, as specified in the Perl README file.
-For use with Apache httpd and mod_perl, see also Apache copyright.
 
 THIS IS BETA SOFTWARE!
 
@@ -16,9 +15,10 @@ MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 
 OVERVIEW
 
-DBIx::Recordset is a perl module, which should make it easier to access a set
-of records in a database.
-It should make standard database access (select/insert/update/delete)
+DBIx::Recordset is a perl module which handles a lot of always repeating
+tasks in database access for you.
+
+The goal is to make standard database access (select/insert/update/delete)
 easier to handle (e.g. web application or scripts to enter/retrieve
 data to/from a database). Special attention is made on web applications to make
 it possible to handle the state-less access and to process the posted data
@@ -26,10 +26,40 @@ of formfields.
 The programmer only has to supply the absolutely necessary information, the
 rest is done by DBIx::Recordset.
 
-You can access (read and write) the database (or a selected subset) as an
-array or you can access it as a hash, where the hashkey is the primary key
-of the databasetable. (like Lincoln Stein's Tie::DBI http://stein.cshl.org/~lstein/Tie-DBI/).
-A record is represented as a hash, which contains one entry per field.
+The main features of DBIx::Recordset are:
+
+- it has a compact interface, normaly only one function call is necessary
+  for setup and data retrival/inseration/deletion
+
+- it takes care about type conversion and quoting
+
+- it is able to access/modify tables via arrays and hashs
+
+- it can automaticly create sub-objects for tables which are logical linked
+  together
+
+- it can automatily create joins based on logical links
+
+- it has input/output filters on a per field/per type basis
+
+- it can create WHERE expression from a hash, which is especially usefull in
+  a cgi environement, where you can simply pass all paramters posted to your cgi
+  script to DBIx::Recordset and DBIx::Recordset creates an corresponding SELECT.
+
+- it can create previous/next buttons for html output
+
+- it works together with HTML::Embperl for easily genration of HTML output
+
+- it has an own database abtraction class DBIx::Compat which gives all the
+  necessary information, so that DBIx::Recordset is able to work with
+  different database systems
+
+- The new class DBIx::Database is able to retrieve and store meta infomation
+  of the database in a centralised location, which can be used for later
+  setup. This is also usefull when running under mod_perl, because you can do
+  all the setup and configuration work at webserver startup time, speeding up
+  your scripts when a actual request is processed.
+
 
 DBIx::Recordset use the DBI API to access the database, so it should work with
 every database for which a DBD driver is available (see also DBIx::Compat)
@@ -37,10 +67,6 @@ every database for which a DBD driver is available (see also DBIx::Compat)
 
 For more information look at perldoc DBIx::Recordset.
 
-NOTE 1: This is the first public release, so some features and
-        performance optimisations are still outstanding.
-
-NOTE 2: For use with HTML::Embperl you need version 0.27-beta or higher
 
 INSTALLATION
 
@@ -72,7 +98,8 @@ Currently there are entries for
 - DBD::Pg
 - DBD::Solid
 - DBD::ODBC
-- DBD::Orcale
+- DBD::Oracle (requires DBD::Orcale 0.60 or higher)
+- DBD::Sybase (not fully tested)
 - DBD::CSV
 
 If you create your own entry please send it to me, so I can include it
