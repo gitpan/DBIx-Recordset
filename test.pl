@@ -12,7 +12,7 @@ use vars qw{ *set1 *set2 *set3 *set4 *set5 *set6 *set7 *set8 *set9 *set10
              @drivers %Drivers 
              $dbh $drv %errcnt $err $rc $contcnt
              $errors $fatal $loaded
-             $Join
+             $Join $SQLJoin
              *rs $rs @rs %rs} ;
 
 
@@ -183,9 +183,16 @@ sub Check
                 $should = $TestCheck{$TestCheck{$id}{'id'}}{$field} ;
                 }
     
-            $is     = $$dat{$field} || '' ;
-            $is =~ /^(.*?)\s*$/ ;
-            $is = $1 || '' ;
+            if (defined ($$dat{$field})) 
+                {
+                $$dat{$field} =~ /^(.*?)\s*$/ ;
+                $is = $1 ; 
+                }
+            else
+                {
+                $is = 'NULL' ;
+                }
+            $should = 'NULL' if (!defined ($should)) ;
 
             print LOG "CHK-OK?: $idfield = $id; $field = <$is>; Should = <$should>\n" ;
              
@@ -230,7 +237,14 @@ sub AddTestRow
     $id =~ s/\'(.*?)\'/$1/ ; 
     while (($k, $v) = each (%$dat))
         {
-        $v =~ s/\'(.*?)\'/$1/ ; 
+        if ($v eq 'NULL')
+            {
+            $v = undef ;
+            }
+        else
+            {
+            $v =~ s/\'(.*?)\'/$1/ ; 
+            }
         $TestCheck{$id}{$k} = $v ;
         print LOG "TEST-DAT: Table $Table[$tabno] \$TestCheck{$id}{$k} = $v\n" ;
         if ($ex)
@@ -239,7 +253,7 @@ sub AddTestRow
             $hTestFields1{$k} = 1 ;
             }
         }
-    if ($ex)
+    #if ($ex)
         {
         #$hTestIds{$id} = 1 ;
         $hTestIds1{$id} = 1 ;
@@ -337,7 +351,8 @@ sub DoTest
     $Password    = $_[3] ;
 
 
-    $Join =  (defined ($DBIx::Compat::Compat{$Driver}{SupportJoin}))?$DBIx::Compat::Compat{$Driver}{SupportJoin}:$DBIx::Compat::Compat{'*'}{SupportJoin} ;    
+    $Join    =  (defined ($DBIx::Compat::Compat{$Driver}{SupportJoin}))?$DBIx::Compat::Compat{$Driver}{SupportJoin}:$DBIx::Compat::Compat{'*'}{SupportJoin} ;    
+    $SQLJoin =  (defined ($DBIx::Compat::Compat{$Driver}{SupportSQLJoin}))?$DBIx::Compat::Compat{$Driver}{SupportSQLJoin}:$DBIx::Compat::Compat{'*'}{SupportSQLJoin} ;    
 
     @Table       = ('dbixrs1', 'dbixrs2', 'dbixrs3', 'dbixrs4') ;
 
@@ -399,7 +414,9 @@ use strict ;
                 { 'id' => 9 ,  'name' => "'Ninth Name'",    'value1' => 9999,  'addon' => "'Is'" },
                 { 'id' => 10,  'name' => "'Tenth Name'",    'value1' => 99910, 'addon' => "'it'" },
                 { 'id' => 11,  'name' => "'Eleventh Name'", 'value1' => 99911, 'addon' => "'it ok?'" },
-                { 'id' => 12,  'name' => "'Twelvth Name'",  'value1' => 99912, 'addon' => "'Or not??'" },
+                { 'id' => 12,  'name' => "'Twelvth Name'",  'value1' => 99912, 'addon' => "''" },
+                { 'id' => 13,  'name' => "'Thirdteenth Name'",  'value1' => 'NULL', 'addon' => 'NULL' },
+                { 'id' => 14,  'name' => "'Fourteenth Name'",  'value1' => 0, 'addon' => 'NULL' },
             ],
             [
                 { 'id' => 1 ,  'name2' => "'First Name in Tab2'",  'value2' => 29991 },
@@ -599,7 +616,7 @@ use strict ;
             $set4 -> SQLSelect ("$Table[0].value1=$Table[2].value1", "id, name, txt")  or die "not ok ($DBI::errstr)" ;
             }
 
-        Check ($TestIds[0], ['id', 'name', 'txt'], \@set4) or print "ok\n" ;
+        Check ($TestIds[2], ['id', 'name', 'txt'], \@set4) or print "ok\n" ;
 
         DBIx::Recordset::Undef ('set4') ;
 
@@ -724,6 +741,7 @@ use strict ;
                            '$operator' => '='})  or die "not ok ($DBI::errstr)" ;
 
 
+    
     Check ([1,2], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
@@ -758,7 +776,7 @@ use strict ;
                            '$operator' => '='})  or die "not ok ($DBI::errstr)" ;
 
 
-    Check ([3], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ($Driver eq 'CSV'?[3]:[3, 14], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
 
@@ -769,7 +787,7 @@ use strict ;
                            '$operator' => '='})  or die "not ok ($DBI::errstr)" ;
 
 
-    Check ([1,2], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ($Driver eq 'CSV'?[1,2]:[1,2,14], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
 
@@ -817,7 +835,119 @@ use strict ;
 
     $set1 -> Search ({'$start'=>5,'$max'=>5, '$next'=>1, '$order'=>'id'})  or die "not ok ($DBI::errstr)" ;
 
-    Check ([11, 12], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ([11, 12, 13, 14], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select NULL values";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({value1 => undef})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ([13], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select empty values";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({addon => ''})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ([12], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select 0";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({value1 => 0})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ([14], $TestFields[0], \@set1) or print "ok\n" ;
+
+
+
+    DBIx::Recordset::Undef ('set1') ;
+
+    # ---------------------
+
+    *set1 = DBIx::Recordset -> Setup ({'!DataSource' => $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[0],
+                                            '!IgnoreEmpty'  =>  1}) or  die "not ok ($DBI::errstr)" ;
+
+    printlogf "Select NULL values Ig-1";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({value1 => undef})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ($TestIds[0], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select empty values Ig-1";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({addon => ''})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ([12], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select 0 Ig-1";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({value1 => 0})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ([14], $TestFields[0], \@set1) or print "ok\n" ;
+
+
+
+    DBIx::Recordset::Undef ('set1') ;
+
+    # ---------------------
+
+    *set1 = DBIx::Recordset -> Setup ({'!DataSource' => $DSN,
+                                            '!Username'     =>  $User,
+                                            '!Password'     =>  $Password,
+                                            '!Table'        =>  $Table[0],
+                                            '!IgnoreEmpty'  =>  2}) or  die "not ok ($DBI::errstr)" ;
+
+    printlogf "Select NULL values Ig-2";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({value1 => undef})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ($TestIds[0], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select empty values Ig-2";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({addon => ''})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ($TestIds[0], $TestFields[0], \@set1) or print "ok\n" ;
+
+    # ---------------------
+
+    printlogf "Select 0 Ig-2";
+    print LOG "\n--------------------\n" ;
+
+    $set1 -> Select ({value1 => 0})  or die "not ok ($DBI::errstr)" ;
+
+
+    Check ([14], $TestFields[0], \@set1) or print "ok\n" ;
+
+
 
     DBIx::Recordset::Undef ('set1') ;
 
@@ -926,6 +1056,52 @@ use strict ;
                           '$conj'         =>  'or' }) or die "not ok ($DBI::errstr)" ;
 
         Check ([1,3,4,5,7,8,9,10,11,12], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
+
+
+        # ---------------------
+
+        printlogf "Order, Group, Append";
+        print LOG "\n--------------------\n" ;
+
+        $set6 -> Search ({id => 5, '$order' => 'id', '$group' => 'name', '$append' => ';;'}) ;
+
+            {
+            my $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) ORDER BY id GROUP BY name ;;' ;
+            $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = ?))) ORDER BY id GROUP BY name ;;' if ($set6 -> {'*Placeholders'}) ;
+            $should = 'SELECT dbixrs1.id, dbixrs1.name, dbixrs3.txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) ORDER BY id GROUP BY name ;;' if ($Driver eq 'mSQL') ;
+            my $is     = $set6 -> LastSQLStatement ;
+            if ($is ne $should) 
+                {
+                print "ERROR, SQL Statement wrong\n" ;
+                print LOG "Is:     $is\n" ;
+                print LOG "Should: $should\n" ;
+            
+                $errors++ ;
+                }
+            else
+                {
+                print "ok\n" ;
+                }
+            }
+        DBIx::Recordset::Undef ('set6') ;
+
+        # ---------------------
+
+        if ($SQLJoin)
+            {
+            printlogf "Search with JOIN";
+            print LOG "\n--------------------\n" ;
+
+            *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                                '!Username'     =>  $User,
+                                                '!Password'     =>  $Password,
+                                                '!Table'        =>  "$Table[0], $Table[2]",
+                                                '!TabJoin'      =>  "$Table[0] LEFT JOIN $Table[2] on ($Table[0].value1=$Table[2].value1)",
+                                                '!Fields'       =>  "$t0\lid, $t0\lname, $t2\ltxt",
+                                                "$t0\lid"       =>  "1\t4" }) or die "not ok ($DBI::errstr)" ;
+
+            Check ([1,4], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
+            }
 
 
         DBIx::Recordset::Undef ('set6') ;
@@ -1742,6 +1918,71 @@ use strict ;
 
 # ---------------------
 
+    printlogf "Use First to get first record";
+    print LOG "\n--------------------\n" ;
+
+    *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                        '$order'=>'id',
+                                        '*id' => '>=',
+                                        'id' => 2    })  or die "not ok ($DBI::errstr)" ;
+
+    {
+    my $r = $set7 -> First ;
+    my @r = ($r) ;
+    
+    Check ([2], $TestFields[1], \@r) or print "ok\n" ;
+    }
+
+    DBIx::Recordset::Undef ('set7') ;
+
+# ---------------------
+
+    printlogf "Use First/Next to get all records";
+    print LOG "\n--------------------\n" ;
+
+    *set8 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                          })  or die "not ok ($DBI::errstr)" ;
+
+    {
+    my $r ;
+    my @r ;
+    push @r, $set8 -> First ;
+    push @r, $r while ($r = $set8 -> Next) ;
+
+    Check ($TestIds[1], $TestFields[1], \@r) or print "ok\n" ;
+    }
+
+    DBIx::Recordset::Undef ('set8') ;
+
+# ---------------------
+
+    printlogf "Use Next to get all records";
+    print LOG "\n--------------------\n" ;
+
+    *set9 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[1]",
+                                          })  or die "not ok ($DBI::errstr)" ;
+
+    {
+    my $r ;
+    my @r ;
+    push @r, $r while ($r = $set9 -> Next) ;
+
+    Check ($TestIds[1], $TestFields[1], \@r) or print "ok\n" ;
+    }
+
+    DBIx::Recordset::Undef ('set9') ;
+
+# ---------------------
+
     printlogf "Update via assigning array ref";
     print LOG "\n--------------------\n" ;
 
@@ -1889,9 +2130,6 @@ use strict ;
             'Second item Type 3',
             'Second item Type 4'], $TestFields[3], $set1{subid}, 'typ') or print "ok\n" ;
 
-    if ($Driver ne 'Solid')
-	{
-
     printlogf "Modify sub table";
     print LOG "\n--------------------\n" ;
 
@@ -1927,8 +2165,7 @@ use strict ;
     DBIx::Recordset::Undef ('set1_') ;
 
     # ---------------------
-    }
-
+    
     printlogf "Add with sub table";
     print LOG "\n--------------------\n" ;
 
@@ -1981,6 +2218,29 @@ use strict ;
 
     DBIx::Recordset::Undef ('set1_') ;
 
+    # ---------------------
+
+    printlogf "Select sub table NULL";
+    print LOG "\n--------------------\n" ;
+
+    *set2 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+                                        '!Username'     =>  $User,
+                                        '!Password'     =>  $Password,
+                                        '!Table'        =>  "$Table[0]",
+                                        '!Links'        =>  {
+                                                            'subv1' => {
+                                                                '!Table' => $Table[2],
+                                                                '!LinkedField' => 'value1'
+								}
+                                                            },
+                                        'id'            =>  13,
+                                            })  or die "not ok ($DBI::errstr)" ;
+
+    Check ([13], $TestFields[0], \@set2) or print "ok\n" ;
+    printlogf "";
+    Check ([], $TestFields[0], $set2{subv1}) or print "ok\n" ;
+
+    DBIx::Recordset::Undef ('set2') ;
 
 
     #########################################################################################

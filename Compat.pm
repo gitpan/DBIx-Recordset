@@ -82,8 +82,10 @@ sub ListFieldsFunc
             'ListFields'     => \&SelectFields,  # Default: Use Select to get field names
             'QuoteTypes'     => { },             # Default: Don't know what to quote
             'SupportJoin'    => 1,               # Default: Driver supports joins (select with multiple tables)
-            'HaveTypes'      => 1                # Default: Driver supports $sth -> {TYPE}
-            },
+            'SupportSQLJoin' => 1,               # Default: Driver supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
+            'HaveTypes'      => 1,               # Default: Driver supports $sth -> {TYPE}
+            'NullOperator'   => 'IS',            # Default: Operator to compare with NULL is IS
+             },
 
     'ConfFile' =>
 	{
@@ -116,6 +118,7 @@ sub ListFieldsFunc
             'Placeholders' => 2,                 # Placeholders supported, but the perl
                                                #   type must be the same as the db type
 
+            'SupportSQLJoin' => 0,               # Driver does not supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
             'QuoteTypes' =>
                 {   17=>1,   18=>1,   19=>1,   20=>1,   25=>1,  409=>1,  410=>1,
                    411=>1,  605=>1, 1002=>1, 1003=>1, 1004=>1, 1009=>1, 1026=>1,
@@ -125,7 +128,9 @@ sub ListFieldsFunc
     'mSQL' => {
             'Placeholders' => 2,                 # Placeholders supported, but the perl
                                                #   type must be the same as the db type
+            'SupportSQLJoin' => 0,               # Driver does not supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
             'ListFields'   => \&ListFields,      # mSQL has it own ListFields function
+            'NullOperator'   => '=',             # Operator to compare with NULL is =
             'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1 }
 # ### use the following line for older mSQL drivers
 #            'QuoteTypes'   => {   2=>1,   6=>1 }
@@ -146,6 +151,10 @@ sub ListFieldsFunc
                                                #   to works all the time ?
             'QuoteTypes'   => {   1=>1,   12=>1,   -1=>1 }
             },
+    'Oracle' => {
+		'HaveTypes'      => 0            #  Driver does not supports $sth -> {TYPE}
+            },
+
     ) ;    
 
 1 ;
@@ -233,6 +242,7 @@ Currently there are entry for
 
 =item B<DBD::CSV>
 
+=item B<DBD::Oracle>
 
 if you detect an error in the definition or add an definition for a new
 DBD driver, please mail it to the author.

@@ -1,5 +1,25 @@
 Revision history for Perl extension DBIx::Recordset
 
+0.18  3 Nov 1998 
+  - Added !TabJoin parameter to support LEFT/RIGTH/INNER JOIN
+    syntax. Spotted by Roman Maeder.
+  - Added $group parameter to support GROUP BY
+  - Added $append parameter to append arbitrary data to the end
+    of an SELECT statement.
+  - Added !IgnoreEmpty which gives you the possiblity to 
+    specify how DBIx::Recordset handles fields with undef value,
+    or empty strings. This may helpfull in a CGI enironement.
+    NOTE: with a value of 2 DBIx::Recordset behaves like versions
+    before 0.18
+  - fixed problem with handling of undef and zero values.
+    undef is now treated as SQL NULL and zero is handled
+    correctly. See also !IgnoreEmpty.
+  - Added entry for DBD::Oracle from Malcolm Cook
+  - fixed a bug in PrevNextForm spotted by David Crook
+  - The first Next after a sucessfull search returns now
+    the first row and not the second one, spotted by Malcom Cook.
+  - fixed a bug so that now linked tables a correctly flushed if modified
+
 0.17  8 Oct 1998
   - DBIx::Recordset now can handle subtables. This means if you have
     one tables which has field which is an key for another table

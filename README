@@ -72,6 +72,8 @@ Currently there are entries for
 - DBD::Pg
 - DBD::Solid
 - DBD::ODBC
+- DBD::Orcale
+- DBD::CSV
 
 If you create your own entry please send it to me, so I can include it
 in the next release.

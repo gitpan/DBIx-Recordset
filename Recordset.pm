@@ -58,7 +58,7 @@ require Exporter;
 
 @ISA       = qw(Exporter);
 
-$VERSION = '0.17-beta';
+$VERSION = '0.18-beta';
 
 
 $id = 1 ;
@@ -139,6 +139,7 @@ sub SetupDBConnection($$$;$$\%)
     my $meta ;
     my $metakey = "$self->{'*DataSource'}//$self->{'*Table'}" ;
     
+    $self->{'*NullOperator'} = defined ($DBIx::Compat::Compat{$self->{'*Driver'}}{NullOperator})?$DBIx::Compat::Compat{$self->{'*Driver'}}{NullOperator}:$DBIx::Compat::Compat{'*'}{NullOperator} ;    
     if (defined ($meta = $Metadata{$metakey}))
         {
         $self->{'*Names'}  = $meta->{'*Names'} ;
@@ -339,10 +340,12 @@ sub New
 ## !Fields      = fields which should be return by a query
 ## !TabRelation = condition which describes the relation
 ##                between the given tables
+## !TabJoin     = JOIN to use in table part of select statement
 ## !PrimKey     = name of primary key
 ## !StoreAll	= store all fetched data
 ##
 ## !Default     = hash with default record data
+## !IgnoreEmpty = 1 ignore undef values, 2 ignore empty strings
 ##
 
 sub SetupObject
@@ -354,9 +357,11 @@ sub SetupObject
 
     $self->{'*Fields'}      = $$parm{'!Fields'} ;
     $self->{'*TabRelation'} = $$parm{'!TabRelation'} ;
+    $self->{'*TabJoin'}     = $$parm{'!TabJoin'} ;
     $self->{'*PrimKey'}     = $$parm{'!PrimKey'} ;
     $self->{'*StoreAll'}    = $$parm{'!StoreAll'} ;
     $self->{'*Default'}     = $$parm{'!Default'} if (defined ($$parm{'!Default'})) ;
+    $self->{'*IgnoreEmpty'} = $$parm{'!IgnoreEmpty'} || 0 ;
     $Data{$self->{'*Id'}}   = [] ;
     $self->{'*FetchStart'}  = 0 ;
     $self->{'*FetchMax'}    = undef ;
@@ -473,6 +478,8 @@ sub Disconnect ($)
         undef $self->{'*StHdl'} ;
         }
 
+    $self -> ReleaseRecords () ;
+
     if (defined ($self->{'*DBHdl'}) && $self->{'*MainHdl'})
         {
         $numOpen-- ;
@@ -494,7 +501,6 @@ sub DESTROY ($)
     {
     my ($self) = @_ ;
 
-    $self -> ReleaseRecords () ;
     $self -> Disconnect () ;
 
     print LOG "DB:  DESTROY (id=$self->{'*Id'}, numOpen = $numOpen)\n" if ($self->{'*Debug'}) ;
@@ -540,6 +546,9 @@ sub STORE
         %$value = %{$self -> {'*Default'}} if (exists ($self -> {'*Default'})) ;
         }
     $r -> {'*new'} = 1 ;
+
+    #$self->{'*LastRow'} = $fetch ;
+    #$self->{'*LastKey'} = $r -> FETCH ($self -> {'*PrimKey'}) ;
 
     return $rec ;
     } 
@@ -775,17 +784,21 @@ sub SQLDelete ($$$)
 ## $expr    = SQL Where condition (optional, defaults to no condition)
 ## $fields  = fields to select (optional, default to *)
 ## $order   = fields for sql order by or undef for no sorting (optional, defaults to no order) 
+## $group   = fields for sql group by or undef (optional, defaults to no grouping) 
+## $append  = append that string to the select statemtn for other options (optional) 
 ## \@bind_values = values which should be inserted for placeholders
 ##
 
-sub SQLSelect (;$$$$)
+sub SQLSelect ($;$$$$$$)
     {
-    my ($self, $expr, $fields, $order, $bind_values) = @_ ;
+    my ($self, $expr, $fields, $order, $group, $append, $bind_values) = @_ ;
 
     my $sth ;  # statement handle
     my $where ; # where or nothing
     my $orderby ; # order by or nothing
+    my $groupby ; # group by or nothing
     my $rc  ;        #
+    my $table ;
 
     $self->{'*StHdl'} -> finish () if (defined ($self->{'*StHdl'})) ;
     undef $self->{'*StHdl'} ;
@@ -798,10 +811,12 @@ sub SQLSelect (;$$$$)
     $order  ||= '' ;
     $expr   ||= '' ;
     $orderby  = $order?'ORDER BY':'' ;
+    $groupby  = $group?'GROUP BY':'' ;
     $where    = $expr?'WHERE':'' ;
     $fields ||= '*';
-    
-    my $statement = "SELECT $fields FROM $self->{'*Table'} $where $expr $orderby $order" ;
+    $table    = $self->{'*TabJoin'} || $self->{'*Table'} ;
+
+    my $statement = "SELECT $fields FROM $table $where $expr $orderby $order $groupby $group $append" ;
 
     if ($self->{'*Debug'})
         { 
@@ -1021,7 +1036,8 @@ sub Last ($)
 
 sub Next ($;$)
     {
-    my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'} + 1 ;
+    my $n = $_[0] ->{'*LastRow'} - $_[0] -> {'*FetchStart'}  ;
+    $n++ if ($_[0] ->{'*CurrRow'} > 0 || $_[0] ->{'*EOD'}) ; 
     my $rec = $_[0] -> FETCH ($n) ;
     return $rec if (defined ($rec) || !$_[1]) ;
 
@@ -1109,6 +1125,9 @@ sub BuildWhere ($$)
     my $Quote = $self->{'*Quote'} ;
     my $Debug = $self->{'*Debug'} ;
     my $placeholders = $self->{'*Placeholders'} ;
+    my $ignore       = $self->{'*IgnoreEmpty'} ;
+    my $nullop       = $self->{'*NullOperator'} ;
+        
 
     if (!ref($where))
         { # We have the where as string
@@ -1157,12 +1176,12 @@ sub BuildWhere ($$)
  
         while (($key, $val) = each (%$where))
             {
-            $type  = substr ($key, 0, 1) ;
-            $val ||= '' ;
+            $type  = substr ($key, 0, 1) || ' ' ;
+            $val = undef if ($ignore > 1 && $val eq '') ;
 
             if ($Debug) { print LOG "DB:  SelectWhere <$key>=<$val> type = $type\n" ; }
 
-            if ($val ne '' && $type =~ /\w|\\|\+|\'|\#/)
+            if (($type =~ /^(\w|\\|\+|\'|\#|\s)$/) && !($ignore && !defined ($val)))
                 {
                 if ($type eq '+')
                     { # composite field
@@ -1172,7 +1191,7 @@ sub BuildWhere ($$)
                     $fconj    = '' ;
                     $fieldexp = '' ;
                     @fields   = split (/\&|\|/, substr ($key, 1)) ;
-                
+
                     $multcnt = 0 ;
                     foreach $field (@fields)
                         {
@@ -1187,6 +1206,8 @@ sub BuildWhere ($$)
                         $op = $$where{"*$field"} || $oper ;
                         if ($placeholders && $type ne '\\')
                             { $fieldexp = "$fieldexp $fconj $field $op \$val" ; $multcnt++ ; }
+                        elsif (!defined ($val))
+                            { $fieldexp = "$fieldexp $fconj $field $nullop NULL" ; }
                         elsif ($$Quote{lc($field)} && $type ne '\\')
                             { $fieldexp = "$fieldexp $fconj $field $op '\$val'" ; }
                         else
@@ -1218,8 +1239,8 @@ sub BuildWhere ($$)
                         $$Quote{lc($key)} = 0 ;
                         }
 
-                
-            
+                    #$val += 0 if ($$Quote{lc($key)}) ; # convert value to a number if necessary
+        
                     if (!defined ($$Quote{lc($key)}) && $type ne '\\')
                         {
                         if ($Debug > 1) { print LOG "DB:  Ignore Single Field $key\n" ; }
@@ -1229,11 +1250,13 @@ sub BuildWhere ($$)
                     if ($Debug > 1) { print LOG "DB:  Single Field $key\n" ; }
 
                     $op = $$where{"*$key"} || $oper ;
-                    if (!$placeholders && $$Quote{lc($key)} && $type ne '\\')
+                    if (!$placeholders && defined ($val) && $$Quote{lc($key)} && $type ne '\\')
                         { $fieldexp = "$key $op '\$val'" ; }
-                    else
+                    elsif (defined ($val) || $placeholders)
                         { $fieldexp = "$key $op \$val" ; }
-  
+                    else
+                        { $fieldexp = "$key $nullop NULL" ; }
+
                     if ($Debug > 1) { print LOG "DB:  Single Field gives $fieldexp\n" ; }
                     }
     
@@ -1255,7 +1278,11 @@ sub BuildWhere ($$)
                                 { push @$bind_values, $val ; }
                             $val = '?' ;
                             }
-                        
+                        elsif (!defined ($val))
+                            {
+                            $val = 'NULL' ;
+                            }
+                                                
                         $vexp = "$vexp $vconj " . eval "\"($fieldexp)\"" ;
                         $vconj ||= $$where{'$valueconj'} || ' or ' ; 
                         }                
@@ -1269,6 +1296,10 @@ sub BuildWhere ($$)
                         for ($i = 0; $i < $multcnt; $i++)
                             { push @$bind_values, $val ; }
                         $val = '?' ;
+                        }
+                    elsif (!defined ($val))
+                        {
+                        $val = 'NULL' ;
                         }
                         
                     $vexp = eval "\"($fieldexp)\"" ;
@@ -1600,12 +1631,14 @@ sub Delete ($$)
 ## $where/%where = SQL Where condition (optional, defaults to no condition)
 ## $fields       = fields to select (optional, default to *)
 ## $order        = fields for sql order by or undef for no sorting (optional, defaults to no order) 
+## $group        = fields for sql group by or undef (optional, defaults to no grouping) 
+## $append       = append that string to the select statemtn for other options (optional) 
 ##
 
 
-sub Select (;$$$)
+sub Select (;$$$$$)
     {
-    my ($self, $where, $fields, $order) = @_ ;
+    my ($self, $where, $fields, $order, $group, $append) = @_ ;
 
     local *newself ;
     if (!ref ($self)) 
@@ -1617,7 +1650,7 @@ sub Select (;$$$)
     my @bind_values ;
     my $expr = $self->BuildWhere ($where, \@bind_values) ;
 
-    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $order, \@bind_values) ;
+    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $order, $group, $append, \@bind_values) ;
     return ($newself && defined ($rc))?*newself:$rc ;
     }
 
@@ -1634,6 +1667,8 @@ sub Select (;$$$)
 ##	$next:	next n records
 ##	$prev:	previous n records
 ##	$order: fieldname(s) for ordering (could also contain USING)
+##      $group: fields for sql group by or undef (optional, defaults to no grouping) 
+##      $append:append that string to the select statemtn for other options (optional) 
 ##      $fields:fieldnams(s) to retrieve    
 ##
 
@@ -1667,7 +1702,7 @@ sub Search ($\%)
     elsif (defined ($$fdat{'$next'}))
         { $start += $max ; }
 
-    my $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}) ; 
+    my $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, $$fdat{'$append'}) ; 
     $self->{'*FetchStart'} = $start ;
     $self->{'*FetchMax'}   = $start + $max - 1 if (defined ($max)) ;
     
@@ -1768,6 +1803,7 @@ sub MoreRecords
     my ($self, $ignoremax) = @_ ;
 
     $self -> PushCurrRec ;
+    $self->{'*FetchMax'} = undef if ($ignoremax) ;
 
     my $more = $self -> Next () ;
 
@@ -2056,7 +2092,7 @@ sub FETCH
     if (!defined ($rs->{'*LastKey'}) || $fetch ne $rs->{'*LastKey'})
         {
         if ($rs->{'*Placeholders'})
-            { $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, [$fetch]) or return undef ; }
+            { $rs->SQLSelect ("$rs->{'*PrimKey'} = ?", undef, undef, undef, undef, [$fetch]) or return undef ; }
         elsif ($rs->{'*Quote'}{$rs->{'*PrimKey'}})
             { $rs->SQLSelect ("$rs->{'*PrimKey'} = " . $rs->{'*DBHdl'} -> quote ($fetch)) or return undef ; }
         else        
@@ -2349,37 +2385,39 @@ sub Flush
     my $rs    = $self -> {'*Recordset'} ;  
     
     #print DBIx::Recordset::LOG "DB:  Row::Flush rs=$rs dirty=$self->{'*dirty'}\n" ;
-    return 1 if (!$self -> {'*dirty'} || !$rs) ;
-
-    print DBIx::Recordset::LOG "DB:  Row::Flush\n" if ($rs->{'*Debug'} > 1) ;
-
-    my $dat = $self -> {'*upd'} ;
-    if ($self -> {'*new'})
+    return 1 if (!$rs) ;
+    if ($self -> {'*dirty'}) 
         {
-        $rs -> Insert ($dat) or return undef ;
-        }
-    else
-        {
-        my $pko ;
-        my $pk = $rs -> {'*PrimKey'} ;
-        $dat->{$pk} = \($self -> {'*data'}{$pk}) if ($pk && !exists ($dat->{$pk})) ;
-        #carp ("Need primary key to update record") if (!exists($self -> {"=$pk"})) ;
-        if (!exists($self -> {'*PrimKeyOrgValue'})) 
+        print DBIx::Recordset::LOG "DB:  Row::Flush\n" if ($rs->{'*Debug'} > 1) ;
+
+        my $dat = $self -> {'*upd'} ;
+        if ($self -> {'*new'})
             {
-            $rs -> Update ($dat)  or return undef ;
-            }
-        elsif (ref ($pko = $self -> {'*PrimKeyOrgValue'}) eq 'HASH')
-            {
-            $rs -> Update ($dat, $pko)  or return undef ;
+            $rs -> Insert ($dat) or return undef ;
             }
         else
             {
-            $rs -> Update ($dat, {$pk => $pko} )  or return undef ;
+            my $pko ;
+            my $pk = $rs -> {'*PrimKey'} ;
+            $dat->{$pk} = \($self -> {'*data'}{$pk}) if ($pk && !exists ($dat->{$pk})) ;
+            #carp ("Need primary key to update record") if (!exists($self -> {"=$pk"})) ;
+            if (!exists($self -> {'*PrimKeyOrgValue'})) 
+                {
+                $rs -> Update ($dat)  or return undef ;
+                }
+            elsif (ref ($pko = $self -> {'*PrimKeyOrgValue'}) eq 'HASH')
+                {
+                $rs -> Update ($dat, $pko)  or return undef ;
+                }
+            else
+                {
+                $rs -> Update ($dat, {$pk => $pko} )  or return undef ;
+                }
             }
+        delete $self -> {'*new'} ;
+        delete $self -> {'*dirty'} ;
+        $self -> {'*upd'} = {} ;
         }
-    delete $self -> {'*new'} ;
-    delete $self -> {'*dirty'} ;
-    $self -> {'*upd'} = {} ;
 
     my $k ;
     my $v ;
@@ -2511,7 +2549,35 @@ with a tablename if more than one table is accessed in one query.
 =item B<!TabRelation>
 
 Condition which describes the relation between the given tables.
-(e.g. tab1.id = tab2.id)
+(e.g. tab1.id = tab2.id) (See also L<!TabJoin>)
+
+  Example
+
+  '!Table'       => 'tab1, tab2',
+  '!TabRelation' => 'tab1.id=tab2.id',
+  'name'         => 'foo'
+
+  This will generate the following SQL statement:
+
+  SELECT * FROM tab1, tab2 WHERE name = 'foo' and tab1.id=tab2.id ;
+
+
+=item B<!TabJoin>
+
+!TabJoin gives you the possibilty to specify an B<INNER/RIGHT/LEFT JOIN> which is
+used in a B<SELECT> statement. (See also L<!TabRelation>)
+
+  Example
+
+  '!Table'   => 'tab1, tab2',
+  '!TabJoin' => 'tab1 LEFT JOIN tab2 ON	(tab1.id=tab2.id)',
+  'name'     => 'foo'
+
+  This will generate the following SQL statement:
+
+  SELECT * FROM tab1 LEFT JOIN tab2 ON	(tab1.id=tab2.id) WHERE name = 'foo' ;
+
+
 
 =item B<!PrimKey>
 
@@ -2538,6 +2604,32 @@ record. If you set this parameter to true the hash will by tied to the whole
 database, this means that the key of the hash will be used as primary key in
 the table to select one row. (This parameter has only an effect on functions
 which return a typglob)
+
+=item B<!IgnoreEmpty>
+
+This parameter defines how B<empty> and B<undefined> values are handled. 
+The values 1 and 2 maybe helpfull when using DBIx::Recordset inside a CGI
+script, because the browser send empty formfields as empty strings.
+
+=over 4
+
+=item B<0 (default)>
+
+An undefinded values is treated as SQL B<NULL>, an empty strings stays as an empty string.
+
+=item B<1>
+
+All fields with an undefined value are ignored when building the WHERE expression.
+
+=item B<1>
+
+All fields with an undefined value or an empty string are ignored when building the WHERE expression.
+
+=back
+
+B<NOTE:> The default for version before 0.18 was 2.
+
+
 
 =item B<!Links>
 
@@ -2653,7 +2745,15 @@ a previous button.
 
 =item B<$order>
 
-Fieldname(s) for ordering (comma separated, could also contain USING)
+Fieldname(s) for ordering (ORDER BY)(must be comma separated, could also contain USING)
+
+=item B<$group>
+
+Fieldname(s) for grouping (GROUP BY)(must be comma separated, could also contain HAVING)
+
+=item B<$append>
+
+String which is append at the end of an SELECT statement, can contain any data.
 
 =item B<$fields>
 
@@ -3106,13 +3206,28 @@ B<street> and B<id>, where id is always equal to streetid. If there are multiple
 streets for one name, you will get as much records for that name as streets
 present for it. For this reason this aproach works best when you have an
 1:1 relation.
-If you have 1:n relations between two tables the following may be a better
+
+There is also the possibility to specifies B<JOINs>. You can do it like this
+
+  *set = DBIx::Recordset -> Search ({
+            '!DataSource' => 'dbi:drv:db',
+	    '!Table'   => 'name, street',
+	    '!TabJoin' => 'name LEFT JOIN street ON (name.streetid=street.id)'}) ;
+
+
+The difference to the first example is, that this version returns also an record
+if not both tables conatins a record for an given id. How this performed depends
+on the JOIN you are given (LEFT/RIGHT/INNER) (see your SQL documentation for details
+about JOINs).
+
+
+If you have an 1:n relations between two tables the following may be a better
 way to handle it:
 
   *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:drv:db',
 		     '!Table'	   => 'name',
 		     '!Links'	   => {
-			streetlink => {
+			'-street'  => {
 			    '!Table' => 'street',
 			    '!LinkedField' => 'id',
 			    '!MainField'   => 'streetid'
@@ -3126,19 +3241,23 @@ used to access another recordset object, which is the result of an query
 where B<streetid = id>. Use
 
   $set{name} to access the name field
-  $set{streetlink}{street} to access the first street (as long as the
+  $set{-street}{street} to access the first street (as long as the
 				    current record of the subobject isn't
 				    modified)
 
-  $set{streetlink}[0]{street}	first street
-  $set{streetlink}[1]{street}	second street
-  $set{streetlink}[2]{street}	third street
+  $set{-street}[0]{street}	first street
+  $set{-street}[1]{street}	second street
+  $set{-street}[2]{street}	third street
 
-  $set[2]{streetlink}[1]{street} to access the second street of the
-				    thrid name
+  $set[2]{-street}[1]{street} to access the second street of the
+				    third name
 
 You can have multiple linked tables in one recordset, also you can nest
 linked tables or can link a table to itself.
+
+
+B<NOTE:> If you select only some fields and not all, the field which is specified by
+'!MainField' must be also given in the '!Fields' or '$fields' parameter.
 
 
 =head1 DEBUGING
@@ -3227,7 +3346,7 @@ table specified by $Table and the Fields a, b, c can be accessed.
 I have made a great effort to make DBIx::Recordset run with various DBD drivers.
 The problem is that not all necessary information is specified via the DBI interface (yet).
 So I have made the module B<DBIx::Compat> which gives information about the difference
-of the various DBD drivers. Currently there are definitions for:
+of the various DBD drivers and underlieing database systems. Currently there are definitions for:
 
 =item B<DBD::mSQL>
 
@@ -3240,6 +3359,8 @@ of the various DBD drivers. Currently there are definitions for:
 =item B<DBD::ODBC>
 
 =item B<DBD::CSV>
+
+=item B<DBD::Oracle>
 
 DBIx::Recordset has been tested with all those DBD drivers (on linux 2.0.32, execpt DBD::ODBC
 which has been tested on Windows '95 using Access 7).

@@ -78,6 +78,14 @@ if ($@ ne '')
 
 print "Found DBI version $DBI::VERSION\n" ;
 
+$skip = 0 ;
+if (-e $configfile)
+    {
+    $skip = GetYesNo ("Use previous configuration for tests", 1) ;
+    }
+	
+if (!$skip)
+    {
 @drvs = DBI::available_drivers () ;
 
 $driversinstalled = 0 ;
@@ -174,6 +182,7 @@ foreach $drv (@drivers)
 print FH ");\n" ;
 
 close FH ;
+    } 
 
 
 WriteMakefile

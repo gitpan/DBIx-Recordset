@@ -7,18 +7,28 @@ Features
 
 - Support cursors, to fetech only those data which is absolutly necessary
 
-- Support for DBD::Oracle
+- Support for DBD::Oracle [Malcom Cook]
+
+- left joins and other select parameters
+
+- Support for FETCHSIZE [Malcom Cook]
 
 Bugs
 ----
-
+- Sub Select with NULL as argument, return all rows instead of none [Roman Maeder]
 
 Tests
 -----
 - DBD::Solid -> modify inside sub table
 
+- DBD::Oracle -> TYPE 
+
 
 Doku 
 ----
+
+- !TabJoin
+- $group
+- $append
 
 
