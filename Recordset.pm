@@ -12,7 +12,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Recordset.pm,v 1.102 2001/07/10 03:58:58 richter Exp $
+#   $Id: Recordset.pm,v 1.106 2002/10/15 14:11:19 richter Exp $
 #
 ###################################################################################
 
@@ -22,6 +22,7 @@ package DBIx::Recordset ;
 
 use strict 'vars' ;
 use Carp ;
+use Data::Dumper;
 
 use DBIx::Database ;
 use DBIx::Compat ;
@@ -68,7 +69,7 @@ require Exporter;
 
 @ISA       = qw(Exporter DBIx::Database::Base);
 
-$VERSION = '0.24';
+$VERSION = '0.25';
 
 
 $PreserveCase = 0 ;
@@ -106,7 +107,11 @@ use constant odCLEAR  => 2 ;
 
 
 # Get filehandle of logfile
-if (defined ($INC{'HTML/Embperl.pm'}))
+if (defined ($INC{'Embperl.pm'}))
+    {
+    tie *LOG, 'Embperl::Log' ;
+    }
+elsif (defined ($INC{'HTML/Embperl.pm'}))
     {
     tie *LOG, 'HTML::Embperl::Log' ;
     }
@@ -161,6 +166,7 @@ sub SetupDBConnection($$$;$$\%)
         $self->{'*DBIAttr'}    = $data_source->{'*DBIAttr'} ;
         $self->{'*MainHdl'}    = 0 ;
         $self->{'*TableFilter'}= $data_source->{'*TableFilter'} ;
+	$self->{'*Query'}      = $data_source->{'*Query'} ;
         }
     elsif (ref ($data_source) eq 'DBIx::Database')
         { # copy from database object
@@ -366,7 +372,7 @@ sub SetupMemberVar
 	{
 	$self -> {$sn} = $param -> {$pn} ;
 	}
-    elsif ($attr = $self -> TableAttr ($pn))
+    elsif (defined ($attr = $self -> TableAttr ($pn)))
 	{
 	$self -> {$sn} = $attr ;
 	}
@@ -442,16 +448,17 @@ sub SetupObject
     $self -> SetupMemberVar ('WriteMode', $parm, 7) ;
     $self -> SetupMemberVar ('TieRow', $parm, 1) ;
     $self -> SetupMemberVar ('LongNames', $parm, 0) ;
+    $self -> SetupMemberVar ('KeepFirst', $parm, 0) ;
     $self -> SetupMemberVar ('LinkName', $parm, 0) ;
     $self -> SetupMemberVar ('NameField', $parm) ;
     $self -> SetupMemberVar ('Order', $parm) ;
     $self -> SetupMemberVar ('TableFilter', $parm) ;
     $self -> SetupMemberVar ('DoOnConnect', $parm) ;
-
+    $self -> SetupMemberVar ('Query', $parm) ;
 
     if ($self -> {'*Serial'}) 
         {
-        $self->{'*PrimKey'}     = $self -> {'*Serial'} if (!($parm->{'!PrimKey'} && !$parm->{'!Serial'})) ;
+        $self->{'*PrimKey'}     = $self -> {'*Serial'} if (!$parm->{'!PrimKey'}) ;
         $self->{'*Sequence'}    ||= "$self->{'*Table'}_seq" ;
     
         if ($self->{'*SeqClass'})
@@ -503,8 +510,9 @@ sub SetupObject
 	{
 	if ($conversion)
 	    {
-	    while (($key, $value) = each (%$conversion))
+	    foreach $key (sort keys %$conversion)
 		{
+		$value = $conversion -> {$key} ;
 		if ($key =~ /^-?\d*$/)
 		    { # numeric -> SQL_TYPE
 		    my $i = 0 ;
@@ -729,6 +737,9 @@ sub Begin
 
     # 'begin' method is unhandled by DBI
     ## ??  $self->{'*DBHdl'} -> func('begin') unless $self->{'*DBHdl'}->{'AutoCommit'};
+
+    $self->{'*DBHdl'}->begin_work;
+
     }
 
 ## ----------------------------------------------------------------------------
@@ -1291,7 +1302,7 @@ sub SQLDelete ($$$)
 
 sub SQLSelect ($;$$$$$$$)
     {
-    my ($self, $expr, $fields, $order, $group, $append, $bind_values, $bind_types) = @_ ;
+    my ($self, $expr, $fields, $order, $group, $append, $bind_values, $bind_types, $makesql, ) = @_ ;
 
     my $sth ;  # statement handle
     my $where ; # where or nothing
@@ -1325,7 +1336,14 @@ sub SQLSelect ($;$$$$$$$)
     $fields ||= '*';
     $table    = $self->{'*TabJoin'} || $self->{'*Table'} ;
 
-    my $statement = "SELECT $fields FROM $table $where $expr $groupby $group $orderby $order $append" ;
+    my $statement;
+    if ($self->{'*Query'}) {
+       $statement = $self->{'*Query'} . " " . $append;
+    } else {
+       $statement = "SELECT $fields FROM $table $where $expr $groupby $group $orderby $order $append" ;
+    }
+
+
 
     if ($self->{'*Debug'} > 1)
         { 
@@ -1335,6 +1353,8 @@ sub SQLSelect ($;$$$$$$$)
         }
 
     $self -> {'*LastSQLStatement'} = $statement ;
+
+    return $statement if $makesql;
 
     $self->{'*Stats'}{'select'}++ ;
 
@@ -1355,7 +1375,9 @@ sub SQLSelect ($;$$$$$$$)
             #$sth -> bind_param ($i+1, $bind_values -> [$i], {TYPE => $bti}) ;
             #$sth -> bind_param ($i+1, $bind_values -> [$i], $bind_types -> [$i] == DBI::SQL_CHAR()?DBI::SQL_CHAR():undef) ;
 	    my $bt = $bind_types -> [$i] ;
-            $sth -> bind_param ($i+1, $bind_values -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE => $bt}:undef ) ;
+	    my @bind_param = ($i+1, $bind_values -> [$i], (defined ($bt) && $bt <= DBI::SQL_CHAR())?{TYPE => $bt}:undef ) ;
+	    warn Dumper(\@bind_param);
+            $sth -> bind_param (@bind_param);
             }
         $rc = $sth -> execute  ;
 	$self->{'*SelectedRows'} = $sth->rows;
@@ -1801,7 +1823,8 @@ sub BuildFields
     if (defined ($fields) && !($fields =~ /^\s*\*\s*$/))
         {
         #@allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } split (/\s*,\s*/, $fields) ;
-        @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } quotewords ('\s*,\s*', 0, $fields) ;
+#        @allfields = map { (/\./)?$_:"$tab4f->{$_}.$_" } quotewords ('\s*,\s*', 0, $fields) ;
+	@allfields = map { (/\./ || !$tab4f->{$_})?$_:"$tab4f->{$_}.$_" } quotewords ('\s*,\s*', 0, $fields) ;
         #print LOG "###allfields = @allfields\n" ;
 	}
     else
@@ -1898,29 +1921,34 @@ sub BuildFields
     my $rtabrel ;
     
     if ($leftjoin == 1)
-	{
-	my @tabs = keys %tables ;
-        $rtabrel = ('(' x scalar(@tabs)) . $table . ' ' . join (' ', map { "left join $_ on $tables{$_})" } @tabs) ;
-	}
-    elsif ($leftjoin == 2)
-	{
-	my $v ;
+      {
+	  my @tabs = keys %tables ;
+	  $rtabrel = ('(' x scalar(@tabs)) . $table . ' ' . join (' ', map { "LEFT JOIN $_ on $tables{$_})" } @tabs) ;
+      } 
+    elsif ($leftjoin == 2)	
+      {
+	  my $v ;
 
-	$tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', map { $v = $tables{$_} ; $v =~ s/=/*=/ ; $v } keys %tables) ;
-	}
-    elsif ($leftjoin == 3)
-	{
-	my $v ;
+	  $tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', map { $v = $tables{$_} ; $v =~ s/=/*=/ ; $v } keys %tables) ;
+      } 
+    elsif ($leftjoin == 3) 
+      {
+	  my $v ;
 
-	$tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', map { "$tables{$_} (+)" } keys %tables) ;
-	}
+	  $tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', map { "$tables{$_} (+)" } keys %tables) ;
+      } 
+    elsif ($leftjoin == 4)
+      {
+	  my @tabs = keys %tables ;
+	  $rtabrel = $table . ' ' . join ' ', map { "LEFT JOIN $_ on $tables{$_}" } @tabs ;
+      }
     else 
-	{
-	my $v ;
+      {
+	  my $v ;
 
-	$rtabrel = $table . ',' . join (',', map { "OUTER $_ " } keys %tables) ;
-	$tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', values %tables) ;
-	}
+	  $rtabrel = $table . ',' . join (',', map { "OUTER $_ " } keys %tables) ;
+	  $tabrel = ($tabrel?"$tabrel and ":'') . join (' and ', values %tables) ;
+      }
 
     return ($rfields, $rtables, $rtabrel, $tabrel, \@replace) ;
     }
@@ -2712,7 +2740,9 @@ sub DeleteWithLinks ($$;$)
     my @bind_types ;
     my $expr = $self->BuildWhere ($where,\@bind_values,\@bind_types) ;
 
-    $self -> savecroak ("Clear (Delete all) disabled for table $self->{'*Table'}") if (!$expr && !($self->{'*WriteMode'} & wmCLEAR)) ;
+    my $clear_disabled_diag =
+      "(!$expr && !($self->{'*WriteMode'} & wmCLEAR))";
+    $self -> savecroak ("Clear (Delete all) disabled for table $self->{'*Table'}: $clear_disabled_diag") if (!$expr && !($self->{'*WriteMode'} & wmCLEAR)) ;
 
     my $links = $self -> {'*Links'} ;
 
@@ -2797,7 +2827,7 @@ sub DeleteWithLinks ($$;$)
 
 sub Select (;$$$$$)
     {
-    my ($self, $where, $fields, $order, $group, $append) = @_ ;
+    my ($self, $where, $fields, $order, $group, $append, $makesql) = @_ ;
 
     local *newself ;
     if (!ref ($self)) 
@@ -2810,7 +2840,7 @@ sub Select (;$$$$$)
     my @bind_types ;
     my $expr = $self->BuildWhere ($where, \$bind_values, \@bind_types) ;
 
-    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $self->{'*Order'} || $order, $group, $append, $bind_values, \@bind_types) ;
+    my $rc = $self->SQLSelect ($expr, $self->{'*Fields'} || $fields, $self->{'*Order'} || $order, $group, $append, $bind_values, \@bind_types, $makesql, ) ;
     return $newself?*newself:$rc ;
     }
 
@@ -2883,7 +2913,7 @@ sub Search ($\%)
     
     {
     local $^W = 0 ;
-    $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, "$$fdat{'$append'} $append") ; 
+    $rc = $self->Select($fdat, $$fdat{'$fields'}, $$fdat{'$order'}, $$fdat{'$group'}, "$$fdat{'$append'} $append", $fdat->{'$makesql'} ) ; 
     }
 
     if ($rc && $$fdat{'$last'})
@@ -3065,7 +3095,7 @@ sub PrevNextForm
 
     
     my $esc = '' ;
-    $esc = '\\' if (defined ($HTML::Embperl::escmode) && ($HTML::Embperl::escmode & 1)) ;
+    $esc = '\\' if ((defined ($HTML::Embperl::escmode) && ($HTML::Embperl::escmode & 1)) || (defined ($Embperl::escmode) && ($Embperl::escmode & 1))) ;
     my $buttons = "$esc<form method=$esc\"POST$esc\"$esc>$esc<input type=$esc\"hidden$esc\" name=$esc\"\$start$esc\" value=$esc\"$start$esc\"$esc>\n$esc<input type=$esc\"hidden$esc\" name=$esc\"\$max$esc\" value=$esc\"$max$esc\"$esc>\n" ;
     my $k ;
     my $v ;
@@ -3357,14 +3387,21 @@ sub PreFetch
 
 sub PreFetchIfExpires
     
-    {
-    my ($self, $rs) = @_ ;
+  {
+
+      my ($self, $rs) = @_ ;
+
+      my $prefetch;
+
+      if (ref ($self -> {'*Expires'}) eq 'CODE') {
+	  $prefetch =  $self -> {'*Expires'}->($self);
+      } elsif (defined ($self -> {'*ExpiresTime'})) {
+	  $prefetch =  $self -> {'*ExpiresTime'} < time
+      }
+
+      $self -> PreFetch ($rs) if $prefetch;
     
-    return if (!defined ($self -> {'*ExpiresTime'}) && $self -> {'*ExpiresTime'} < time) ;
-    return if (ref ($self -> {'*Expires'}) ne 'CODE' || ! (&{$self -> {'*Expires'}}($self))) ;
-    
-    $self -> PreFetch ($rs) ;
-    }
+  }
 
 ## ----------------------------------------------------------------------------
 ##
@@ -3705,7 +3742,23 @@ sub TIEHASH
 	my $of ;
         my $ofunc    = $rs -> {'*OutputFuncArray'} || [] ;
 	my $linkname = $rs -> {'*LinkName'} ;
-	if ($linkname < 2)
+        if ($rs -> {'*KeepFirst'})
+            {
+            $i = -1 ;
+	    %$data = () ;
+            if ($dat)
+                {
+                foreach my $k (@$dat)
+                    {
+                    $i++ ;
+                    my $hkey = ($DBIx::Recordset::PreserveCase?$$names[$i]:lc($$names[$i])) ;
+
+                    #warn "hkey = $hkey data = $k\n" ;
+                    $data -> {$hkey} = ($ofunc->[$i]?(&{$ofunc->[$i]}($k)):$k) if (!exists $data -> {$hkey}) ;
+                    }
+                }
+            }
+	elsif ($linkname < 2)
             {    
             $i = -1 ;
 	    %$data = map { $i++ ; ($DBIx::Recordset::PreserveCase?$$names[$i]:lc($$names[$i])) => ($ofunc->[$i]?(&{$ofunc->[$i]}($_)):$_) } @$dat if ($dat) ;
@@ -4035,11 +4088,12 @@ DBIx::Recordset - Perl extension for DBI recordsets
 
  use DBIx::Recordset;
 
- # Setup a new object and select some recods...
+ # Setup a new object and select some records...
  *set = DBIx::Recordset -> Search ({'!DataSource' => 'dbi:Oracle:....',
                                     '!Table'      => 'users',
-                                    '$where'      => 'name = ? and age > ?',
-                                    '$values'     => ['richter', 25] }) ;
+                                    name          => 'richter',
+                                    age           => 25
+                                    ));
 
  # Get the values of field foo ...
  print "First Records value of foo is $set[0]{foo}\n" ;
@@ -4074,36 +4128,41 @@ DBIx::Recordset is a perl module for abstraction and simplification of
 database access.
 
 The goal is to make standard database access (select/insert/update/delete)
-easier to handle and independend of the underlying DBMS. Special attention is
-made on web applications to make it possible to handle the state-less access
+easier to handle and independent of the underlying DBMS. Special attention is
+paid to web applications to make it possible to handle the state-less access
 and to process the posted data of formfields, but DBIx::Recordset is not
 limited to web applications.
 
-B<DBIx::Recordset> uses the DBI API to access the database, so it should work with
-every database for which a DBD driver is available (see also DBIx::Compat).
+B<DBIx::Recordset> uses the DBI API to access the database, so it should   
+work with every database for which a DBD driver is available (see also
+DBIx::Compat).  
 
 Most public functions take a hash reference as parameter, which makes it simple
 to supply various different arguments to the same function. The parameter hash
-can also be taken from a hash containing posted formfields like those available with
-CGI.pm, mod_perl, HTML::Embperl and others.
+can also be taken from a hash containing posted formfields like those available
+with CGI.pm, mod_perl, HTML::Embperl and others.
 
 Before using a recordset it is necessary to setup an object. Of course the
-setup step can be made with the same function call as the first database access,
-but it can also be handled separately.
+setup step can be made with the same function call as the first database
+access, but it can also be handled separately.
 
-Most functions which set up an object return a B<typglob>. A typglob in Perl is an 
-object which holds pointers to all datatypes with the same name. Therefore a typglob
-must always have a name and B<can't> be declared with B<my>. You can only
+Most functions which set up an object return a B<typeglob>. A typeglob in Perl
+is an object which holds pointers to all datatypes with the same
+name. Therefore a typeglob 
+must always have a name and can B<not> be declared with B<my>. You can only
 use it as B<global> variable or declare it with B<local>. The trick for using
-a typglob is that setup functions can return a B<reference to an object>, an
+a typeglob is that setup functions can return a B<reference to an object>, an
 B<array> and a B<hash> at the same time.
 
 The object is used to access the object's methods, the array is used to access
 the records currently selected in the recordset and the hash is used to access
 the current record.
 
-If you don't like the idea of using typglobs you can also set up the object,
+If you don't like the idea of using typeglobs you can also set up the object,
 array and hash separately, or just set the ones you need.
+
+For an extensive collection of runnable DBIx::Recordset examples see
+L<DBIx::Recordset::Playground>.
 
 =head1 ARGUMENTS
 
@@ -4208,9 +4267,9 @@ consist of the fieldnames, but are built in the form table.field.
 
 =item B<!Order>
 
-Fields which should be used for ordering any query. If you have specified multiple
-tables the fieldnames should be unique. If the names are not unique you must
-specify them among with the tablename (e.g. tab1.field).
+Fields which should be used for ordering any query. If you have specified
+multiple tables the fieldnames should be unique. If the names are not unique
+you must specify them among with the tablename (e.g. tab1.field).
 
 
 NOTE 1: Fieldnames specified with !Order can't be overridden. If you plan
@@ -4367,8 +4426,8 @@ All fields with an undefined value are ignored when building the WHERE expressio
 
 =item B<2>
 
-All fields with an undefined value or an empty string are ignored when building the 
-WHERE expression.
+All fields with an undefined value or an empty string are ignored when building
+the WHERE expression.
 
 =back
 
@@ -4671,8 +4730,8 @@ Operator for the named field
  'value' => 9, '*value' => '>' expand to value > 9
 
 
-Could also be an array ref, so you can pass different operators for the values. This
-is mainly handy when you need to select a range
+Could also be an array ref, so you can pass different operators for the
+values. This is mainly handy when you need to select a range
 
   Example:
 
@@ -4707,6 +4766,52 @@ specify more the one sub expression, add a numerical index to $expr (e.g. $expr1
                      
 
 =head2 Search parameters
+
+=item B<!Query> (new in 0.25)
+
+Providing this parameter allows one to give a full SQL query to Recordset. A
+completely working example exists in L<DBIx::Recordset::Playground>:
+
+ use vars qw(*set);
+
+ *set =
+   DBIx::Recordset -> Search
+   ({
+    '!DataSource' => dbh(),
+    '$max' => 4,
+    '!Query' => 'SELECT * FROM AUTHORS'
+   });
+
+ while ($set->Next) {
+    print Dumper(\%set)
+ }
+
+
+=item B<$makesql> (new in 0.25)
+
+Providing this flag generates SQL but does not execute it against the database:
+
+        $set -> Search 
+	  ({
+	    id => 5, '$order' => 'id', '$group' => 'name', 
+	    '$append' => ';;', '$makesql' => 1
+	   }) ;
+
+
+        my $sql     = $set -> LastSQLStatement ;
+
+ # yields...
+
+         SELECT 
+           id, name, txt 
+         FROM 
+           dbixrs1, dbixrs3 
+         WHERE 
+           (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) 
+         GROUP BY 
+           name 
+         ORDER BY 
+           id
 
 =item B<$start>
 
@@ -4771,7 +4876,7 @@ for specifying the right key. If such a primary exists in your table, you
 should specify it here, because it helps DBIx::Recordset optimize the building
 of WHERE expressions.
 
-See also B<!primkey>
+See also B<!PrimKey>
 
 
 =head2 Execute parameters
@@ -6307,22 +6412,40 @@ Name)) or (  (  id > 6 and addon <> 6)  or  (  id > 0 and addon <> 0))) ;
 
 =head1 SUPPORT
 
-As far as possible for me, support will be available via the DBI Users' mailing 
-list. (dbi-user@fugue.com)
+Support is available on the HTML::Embperl mailing list:
+
+    embperl@perl.apache.org
+
+Put "DBIx::Recordset" in the title
 
 =head1 AUTHOR
 
-G.Richter (richter@dev.ecos.de)
+DBIx::Recordset is maintained by 
+Terrence Brannon (metaperl@urth.org)
+
+It was written by
+Gerald Richter (richter@dev.ecos.de)
+
+=head1 TESTED ON
+
+The latest DBI drivers for MySQL, SQLite and Postgresql.
+
+Tests/patches for other databases welcome!
+
 
 =head1 SEE ALSO
 
-=item Perl(1)
-=item DBI(3)
-=item DBIx::Compat(3)
-=item HTML::Embperl(3) 
+=item Perl
+=item L<DBI>
+=item L<DBIx::Recordset::Playground>
+=item L<DBSchema::Sample>
+=item L<DBIx::Compat>
+=item L<DBIx::Database>
+=item L<HTML::Embperl>
 http://perl.apache.org/embperl/
-=item Tie::DBI(3)
+=item L<Tie::DBI>
 http://stein.cshl.org/~lstein/Tie-DBI/
+
 
 
 =cut

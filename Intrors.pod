@@ -320,7 +320,7 @@ Here is an example:
 	    </td>
 	</tr>
       </table>
-      [+ $set -> PrevNextForm ('\<\<Prev', 'Next\>\>', \%fdat) ; +]
+      [+ $set -> PrevNextForm ('\<\<Prev', 'Next\>\>', \%fdat) +]
       <hr>
       <a href="example4.htm?!Table=[+ $fdat{'!Table'} +]&%3dempty=1">Search</a> record in table '[+ $fdat{'!Table'} +]' 
     [$else$]

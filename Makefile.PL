@@ -13,10 +13,14 @@ use ExtUtils::MakeMaker;
 %ignore = ('ExampleP' => 1,
            'NullP'    => 1,
            'Sponge'   => 1,
+           'Proxy'   => 1,
 	   'File'     => 1) ;
 
-%datasource = ('Pg'    => 'dbi:Pg:dbname=test',
-               'Solid' => 'dbi:Solid:') ;
+%datasource = (
+	       'Pg'       => 'dbi:Pg:dbname=test',
+	       'SQLite'   => 'dbi:SQLite:test.db',
+               'Solid'    => 'dbi:Solid:'
+	      ) ;
 
 $configfile = 'test/Config.pl' ;
 
@@ -131,6 +135,19 @@ foreach $drv (@drivers)
 print "\n" ;
 print "For running tests it's necessary to have an existing datasource for each\n" ;
 print "DBD driver against which DBIx::Recordset should be tested.\n" ;
+print '
+For most drivers, 
+
+   DROP DATABASE TEST; CREATE DATABASE TEST 
+
+is adequate. For SQLite, it is recommended to do the following:
+
+   cd $DIST; cat > test.db <control-d>
+
+to create an empty database. $DIST is the root directory of the Recordset
+distribution.
+';
+
 print "Please enter a valid datasource (or accept the default) for each DBD driver\n" ;
 print "or enter a '.' if you do not want to test DBIx::Recordset against this driver\n" ;
 print "\n" ;
@@ -172,9 +189,13 @@ print "In every of the above datasources the tables\n" ;
 print "\n" ;
 print "   dbixrs1, dbixrs2, dbixrs3, dbixrs4\n" ;
 print "\n" ;
-print "will be created and droped afterwards. Please make sure the datasources\n" ;
-print "exists before you run make test\n" ;
-print "\n" ;
+print "will be created and dropped afterwards. 
+Please make sure the datasources
+exist *before* you run make test.
+
+
+" ;
+
 
 
 open FH, ">$configfile" or die "Cannot open $configfile for writing ($!)" ;

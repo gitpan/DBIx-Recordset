@@ -14,3 +14,4 @@ Intrors.pod
 Recordset/FileSeq.pm
 Recordset/DBSeq.pm
 
+META.yml                                Module meta-data (added by MakeMaker)

@@ -13,12 +13,14 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: Compat.pm,v 1.26 2001/07/10 03:58:58 richter Exp $
+#   $Id: Compat.pm,v 1.27 2001/07/10 05:06:51 richter Exp $
 #
 ###################################################################################
 
 package DBIx::Compat ;
 
+use Carp qw(cluck);
+use Data::Dumper;
 use DBI ;
 
 sub SelectFields
@@ -128,6 +130,23 @@ sub ListTablesFunc
 
     return @tabs ;
     }
+
+sub ListTablesMySQL
+
+  {
+   
+      my $hdl = shift;
+
+      my @tabs =  ListTablesFunc ($hdl) ;
+
+#      die Dumper(\@tabs);
+
+      @tabs = map { s/`//g; $_ } @tabs;
+
+
+      
+  }
+
 
 sub ListTablesPg
 
@@ -253,6 +272,34 @@ sub InformixGetSerial
             'CanDropColumn' => 1,                # DBMS can drop a column
             'QuoteIdentifier' => undef,          # DBMS can handle idntifiers with spaces by quoteing them. Default: no
              },
+    'SQLite'  =>
+            {
+            'Placeholders'   => 10,              # Default: Placeholder are supported
+            'ListFields'     => \&SelectFields,  # Default: Use Select to get field names
+            'ListTables'     => \&ListTables,    # Default: Use DBI $dbh -> tables
+            # QuoteTypes isn't used anymore !!
+            'QuoteTypes'   => {   1=>1,   12=>1,  -1=>1, 9 => 1, 10 => 1, 11 => 1}, # Default: ODBC Types, quote char, varchar and longvarchar
+            'NumericTypes'   => { 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 1, 7 => 1, 8 => 1, -5 => 1, -6 => 1}, # Default numeric ODBC Types
+            'SupportJoin'    => 1,               # Default: Driver supports joins (select with multiple tables)
+            'SupportSQLJoin' => 4,               # Default: Driver supports INNER/LEFT/RIGHT JOIN Syntax in SQL select
+            'SQLJoinOnly2Tabs' => 0,             # Default: Driver supports LEFT/RIGHT JOIN with more then two tables
+            'HaveTypes'      => 0,               # Default: Driver supports $sth -> {TYPE}
+            'NullOperator'   => 'IS',            # Default: Operator to compare with NULL is IS
+            'HasInOperator'  => 1,               # Default: DBMS support x IN (y)
+	    'NeedNullInCreate' => '',            # Default: NULL allowed without explicit declare in CREATE
+	    'EmptyIsNull'    => 0,		 # Default: Empty strings ('') and NULL are different
+	    'LimitOffset'    => \&LimitOffsetStrPg,		 # Default: Don't use LIMIT/OFFSET in SELECTs
+            'GetSerialPreInsert' => undef,       # Default: Driver does not support serials
+            'GetSerialPostInsert' => undef,      # Default: Driver does not support serials
+            'CreateTypes' =>                        # conversion for CreateTables
+                    {
+                    'counter'  => 'INTEGER PRIMARY KEY',
+                    },
+            'CreateSeq'    => 0,                 # Create sequence for counter
+            'CreatePublic' => 0,                 # Create public synonym for table
+            'CanDropColumn' => 0,                # DBMS can drop a column
+            'QuoteIdentifier' => undef,          # DBMS can handle idntifiers with spaces by quoteing them. Default: no
+             },
 
     'ConfFile' =>
 	{
@@ -285,12 +332,13 @@ sub InformixGetSerial
             'HaveTypes'      => 0               # Driver does not support $sth -> {TYPE}
 	},	
 
-    'Pg' => {
-            'Placeholders' => 2,                # Placeholders supported, but the perl
+     'Pg' => 
+     {
+      'Placeholders' => 2,                # Placeholders supported, but the perl
 						#   type must be the same as the db type
 
-            'SupportSQLJoin' => 0,              # Driver does not supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
-            'NumericTypes'   => { 
+      'SupportSQLJoin' => 1,              # Driver does not supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
+      'NumericTypes'   => { 
                                 20 => 1, 
                                 21 => 1, 
                                 22 => 1, 
@@ -303,7 +351,7 @@ sub InformixGetSerial
                                 }, 
 
      
-            'QuoteTypes' =>
+      'QuoteTypes' =>
                 {   16 => 1, 17=>1,   18=>1,   19=>1,   20=>1,   25=>1,  409=>1,  410=>1,
                     411=>1,  605=>1, 
                     702  =>1,   # abstime
@@ -316,15 +364,21 @@ sub InformixGetSerial
                     1186 =>1,   # interval
                     1296 =>1
                  },
-	    'LimitOffset'    => \&LimitOffsetStrPg, # Only PostgreSQL 6.5+
+      'LimitOffset'    => \&LimitOffsetStrPg, # Only PostgreSQL 6.5+
 
 #### Use the following line for older DBD::Pg versions (< 0.89) which does
 #    not support the table_info function
-#            'ListTables'     => \&ListTablesPg,    # DBD::Pg
-            'GetSerialPreInsert' => \&PgGetSerial,
-            },
+      #            'ListTables'     => \&ListTablesPg,    # DBD::Pg
+      'GetSerialPreInsert' => \&PgGetSerial,
+      'CreateTypes' =>                 # conversion for CreateTables
+      {
+       'counter'  => 'serial',
+      }
+     },
+
+
     
-    'mSQL' => {
+  'mSQL' => {
             'Placeholders'	=> 2,		    # Placeholders supported, but the perl
 						    #   type must be the same as the db type
             'SupportSQLJoin'	=> 0,		    # Driver does not supports INNER/LEFT/RIGHt JOIN Syntax in SQL select
@@ -342,7 +396,7 @@ sub InformixGetSerial
             'Placeholders' => 10,		    # Placeholders supported, but the perl
 						    #   type must be the same as the db type
             'SQLJoinOnly2Tabs' => 0,		    # mysql supports LEFT/RIGHT JOIN with more than two tables
-            'ListTables'     => \&ListTablesFunc,   # DBD::mysql $dbh -> func
+            'ListTables'     => \&ListTablesMySQL,   # DBD::mysql $dbh -> func
 	    'LimitOffset'    => \&LimitOffsetStrMySQL, 
             'GetSerialPostInsert' => \&MysqlGetSerial,
             'CreateTypes' =>                        # conversion for CreateTables
@@ -424,6 +478,24 @@ sub InformixGetSerial
             },
 
 
+    'Sprite' => {
+            'Placeholders' => 2,            # Placeholders supported, but perl type must be the same as type in db
+                            #   string where a number expected
+            'QuoteTypes'   => {   
+                            -4=>1,
+                            -3=>1,
+                            -1=>1,
+                            1=>1, 9=>1,  11=>1,   12=>1, },
+            'SupportJoin' => 0,         # NO JOINS (YET) IN SPRITE! 
+            'SupportSQLJoin' => 0,          # Oracle need  a = b (+) instead of  INNER/LEFT/RIGHt JOIN Syntax in SQL select
+            'EmptyIsNull'    => 1,          # Sprite converts empty strings ('') to NULL
+            'HaveTypes'      => 1,      #  Driver does supports $sth -> {TYPE}
+            'GetSerialPreInsert' => \&SeqGetSerial,
+            'HasInOperator'  => 0,               # DBMS not support x IN (y)
+            },
+
+
+
     ) ;    
 
 
@@ -431,12 +503,21 @@ sub InformixGetSerial
 
 sub GetItem
 
-    {
-    my ($driver, $name) = @_ ;
+  {
+      my ($driver, $name) = @_ ;
 
-    return $Compat{$driver}{$name}  if (exists ($Compat{$driver}{$name})) ;
-    return $Compat{'*'}{$name} ; 
-    }
+      my $return;
+
+      if (exists ($Compat{$driver}{$name})) 
+	{
+	    $return =  $Compat{$driver}{$name}  ;
+	}
+      else
+	{
+	    cluck "returning default for $name on driver $driver";
+	    $return =  $Compat{'*'}{$name} ; 
+	}
+  }
 
 1 ;
 

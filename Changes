@@ -1,7 +1,41 @@
-Revision history for Perl extension DBIx::Recordset
 
+0.25
+2003-12-07  U-MOKSHA\metaperl  <metaperl@urth.org>
 
-0.24 10. July 2001
+	* Recordset.pm : added support for direct Query input.
+
+2003-12-02  U-MOKSHA\metaperl  <metaperl@urth.org>	
+	
+	* test.pl (DoTest): all tests now pass successfully for Postgres
+	and SQLite
+	
+	
+2003-11-26  U-MOKSHA\metaperl  <metaperl@urth.org>
+
+	* Recordset.pm (BuildFields): when building the FROM clause for
+	LEFT JOINs Recordset placed parentheses around it, like this:
+
+	SELECT
+	dbixrs1.id,dbixrs1.name,dbixrs1.value1,dbixrs1.addon,dbixrs2.value2 FROM (dbixrs1 left join dbixrs2 on dbixrs1.id = dbixrs2.id) WHERE   dbixrs1.id IN (2, 5, 10); 
+
+	but this caused a syntax error in sqlite, so a new leftjoin type
+	of 4 was introduced to support LEFT JOIN with no parentheses
+	around the join
+	
+	* added support to DBIx::Database so that it would accept a DBI
+	database handle. the entire test suite for DBD::Pg now passes.
+
+	* added the '$makesql' flag to Search() so that generated SQL can
+	be returned instead of executed. It will remain undocumented until
+	it is supported for Update(), Delete(), and Insert(). It was added
+	in order that the SQL generated for the test "Order, Group,
+	Append" would pass on Postgres which finds the generated SQL
+	invalid. 
+	
+
+  - Make sure filters given by name override filters given by type.
+
+  t0.24 10. July 2001
 
   - Added Code to DBIx::Database to Create/Modify/Drop tables
     See CreateTables/DropTables

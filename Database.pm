@@ -1,7 +1,7 @@
 
 ###################################################################################
 #
-#   DBIx::Recordset - Copyright (c) 1997-2000 Gerald Richter / ECOS
+#   DBIx::Database - Copyright (c) 1997-2003 Gerald Richter / ECOS
 #
 #   You may distribute under the terms of either the GNU General Public
 #   License or the Artistic License, as specified in the Perl README file.
@@ -29,8 +29,9 @@ use vars qw{$LastErr $LastErrstr *LastErr *LastErrstr *LastError $PreserveCase} 
 *PreserveCase   = \$DBIx::Recordset::PreserveCase;
 
 
-use Carp ;
+use Carp qw(confess cluck);
 
+use Data::Dumper;
 use File::Spec ;
 use DBIx::Recordset ;
 use Text::ParseWords ;
@@ -54,7 +55,7 @@ sub savecroak
 
     #$Carp::extra = 1 ;
     #Carp::croak $msg ;
-    Carp::confess $msg ;
+    confess($msg);
     }
 
 ## ----------------------------------------------------------------------------
@@ -170,6 +171,16 @@ sub do($$;$$$)
 
 ## ----------------------------------------------------------------------------
 ##
+## _build_meta_key
+##
+## used to build the metakey to find tables.o
+## $table        = table (multiple tables must be comma separated)
+##
+
+
+
+## ----------------------------------------------------------------------------
+##
 ## QueryMetaData
 ##
 ## $table        = table (multiple tables must be comma separated)
@@ -214,6 +225,7 @@ sub QueryMetaData($$)
     my $i ;
 
     foreach $tab (@tabs)
+
         {
         next if ($tab =~ /^\s*$/) ;
     
@@ -468,6 +480,8 @@ sub QueryMetaData($$)
 
 package DBIx::Database ;
 
+use Carp qw(cluck confess);
+
 use strict 'vars' ;
 
 use vars (
@@ -564,6 +578,8 @@ sub new
     my $metakey  ;
     my $self ;
 
+
+
     if (!($data_source =~ /^dbi:/i)) 
         {
         $metakey    = "-DATABASE//$1"  ;
@@ -599,6 +615,14 @@ sub new
     my $hdl ;
     $self->{'*DBHdl'} = undef if ($reconnect) ;
 
+
+    if (ref ($data_source) and eval { $data_source->isa('DBI::db') } )
+      {
+
+	  $self->{'*DBHdl'}      = $data_source;
+	  $self->{'*Driver'}     = $data_source->{Driver}->{Name};
+      }
+
     if (!defined ($self->{'*DBHdl'}))
         {
         $hdl = $self->connect ($password) ;
@@ -624,6 +648,8 @@ sub new
     if (!$tables)
         { # Query the driver, which tables are available
         my $ListTables = DBIx::Compat::GetItem ($drv, 'ListTables') ;
+
+#	cluck ("listtables ($drv): $ListTables");
 
         
         if ($ListTables)
@@ -726,7 +752,10 @@ sub TableAttr
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
+	    my $metadump = Dumper(\%DBIx::Recordset::Metadata);
+	    my $diag  =  "Unknown table $table in $self->{'*DataSource'}
+Here is the Metadata hash: $metadump";
+        $self -> savecroak ($diag);
         }
 
     # set new value if wanted
@@ -768,7 +797,10 @@ sub TableLink
     
     if (!defined ($meta = $DBIx::Recordset::Metadata{$metakey})) 
         {
-        $self -> savecroak ("Unknown table $table in $self->{'*DataSource'}") ;
+	    my $metadump = Data::Dumper::Dumper(\%DBIx::Recordset::Metadata);
+	    my $diag = "Unknown table $table in $self->{'*DataSource'}
+Metadata dump: $metadump";
+	    $self -> savecroak ($diag);
         }
 
     return $meta -> {'*Links'} if (!defined ($key)) ;

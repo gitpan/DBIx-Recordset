@@ -4,6 +4,7 @@
 ######################### We start with some black magic to print on failure.
 
 use strict ;
+
 use vars qw{ *set1 *set2 *set3 *set4 *set5 *set6 *set7 *set8 *set9 *set10
              *set11 *set12 *set13 *set14 *set15 *set16 *set17 *set18 *set19 *set20
              *set1_ *set20c *set13h *set13h2 %set15h
@@ -16,6 +17,9 @@ use vars qw{ *set1 *set2 *set3 *set4 *set5 *set6 *set7 *set8 *set9 *set10
              *rs $rs @rs %rs
              $nocleanup
              $QuoteIdentifier} ;
+
+
+use Data::Dumper;
 
 
 BEGIN { $| = 1;  $fatal = 1 ; print "\nLoading...                "; }
@@ -94,7 +98,7 @@ sub Check
 
     local $^W = 0 ;
 
-    print LOG "CHK-IDS: @$ids\n" ;
+    print LOG "IDS EXPECTED: @$ids\n" ;
     
     $idfield ||= 'id' ;
 
@@ -152,10 +156,13 @@ sub Check
     $n = $#$ids + 1 ;
     while ($dat = $$set[$i])
         {
-        $v = $$dat{$idfield} ;
+#	    print LOG "\tV ";
+	    $v = $$dat{$idfield} ;
+#	    print LOG "  <$v>  ";
         $v =~ s/^(.*?)\s*$/$1/ ; 
+#	    print LOG "  <$v>  \n";
         $setid{$v} = $i ;
-        #print LOG "idfield =$idfield;$v;$i; \n" ;
+        print LOG "idfield =$idfield;$v;$i; \n" ;
         print LOG "CHK-DAT:" ;
         while (($k, $v) = each (%$dat))
             { $v ||= '' ; print LOG "$k=$v; " ; }
@@ -169,7 +176,7 @@ sub Check
     if ($i < $n)
         {
         printlog "ERROR in $lasttest\n" ;
-        printlog "Get too few rows (get $i, expected $n)\n" ;
+        printlog "Got too few rows (got $i, expected $n)\n" ;
         $errors++ ;
         return 1 ;
         } 
@@ -177,46 +184,53 @@ sub Check
     if ($i > $n)
         {
         printlog "ERROR in $lasttest\n" ;
-        printlog "Get too many rows (get $i, expected $n)\n" ;
+        printlog "Got too many rows (got $i, expected $n)\n" ;
         $errors++ ;
         return 1 ;
         } 
     
     foreach $id (@$ids)
-        {
-        $dat = $$set[$setid{$id}] ;
-        #print LOG "id =$id;$setid{$id};\n" ;
-        foreach $field (@$fields)
-            {
+      {
+	  $dat = $$set[$setid{$id}] ;
+	  print LOG "id =$id;$setid{$id};dat = " . Dumper($dat) . "\n" ;
+	  foreach $field (@$fields)
+	    {
             if (exists ($TestCheck{$id}{$field}))
                 {
                 $should = $TestCheck{$id}{$field} ;
+		print LOG "should-bound-a via $id and $field\n" ;
                 }
             else
                 {
                 $should = $TestCheck{$TestCheck{$id}{'id'}}{$field} ;
+		print LOG "should-bound-b\n" ;
                 }
     
+	    if (!defined ($should) && !$EmptyIsNull) {
+		$should = 'NULL' ;
+		print LOG "should-bound-c\n" ;
+	    }
+
             if (defined ($$dat{$field}) || $EmptyIsNull) 
                 {
                 $$dat{$field} =~ /^(.*?)\s*$/ ;
                 $is = $1 ; 
+		print LOG "\$is = $1 because \$dat->{$field} = $$dat{$field}\n";
                 }
             else
                 {
                 $is = 'NULL' ;
                 }
-            $should = 'NULL' if (!defined ($should) && !$EmptyIsNull) ;
 
-            print LOG "CHK-OK?: $idfield = $id; $field = <$is>; Should = <$should>\n" ;
+            print LOG "CHK-OK-a?: $idfield = $id; $field = <$is>; Should = <$should>\n" ;
              
             if ($should ne $is)
                 {
                 printlog "ERROR in $lasttest\n" ;
                 printlog "$idfield     = $id\n" ;
-                printlog "Field  = $field\n" ;
-                printlog "Is     = $is\n" ;
-                printlog "Should = $should\n" ;
+                printlog "The field named $field\n" ;
+                printlog "has value $is\n" ;
+                printlog "When it should have value $should\n" ;
                 $errors++ ;
                 return 1 ;
                 }
@@ -245,7 +259,7 @@ sub CheckField
         }
     $should = 'NULL' if (!defined ($should) && !$EmptyIsNull) ;
 
-    print LOG "CHK-OK?: $name = <$is>; Should = <$should>\n" ;
+    print LOG "CHK-OK-b?: $name = <$is>; Should = <$should>\n" ;
      
     if ($should ne $is)
         {
@@ -396,28 +410,26 @@ sub AddTestData
 
 #################################################
 
-sub DropTestTables
-
-    {
-    my ($dbh, @tlist) =@_;
-    return unless ($dbh and @tlist);
+sub DropTestTables   {
+    my ($_dbh, @tlist) =@_;
+    return unless ($_dbh and @tlist);
     foreach (@tlist) 
-        {
-        if ($QuoteIdentifier)
+      {
+	  if ($QuoteIdentifier)
             {
-            if (!$dbh->do( "DROP TABLE \"$_\""))
-                {
-                $dbh->do( 'DROP TABLE "'. uc ($_) . '"') ;
-                }
+		if (!$_dbh->do( "DROP TABLE \"$_\""))
+		  {
+		      $_dbh->do( 'DROP TABLE "'. uc ($_) . '"') ;
+		  }
             }
-        else
+	  else
             {
-            $dbh->do( "DROP TABLE $_");
+		$_dbh->do( "DROP TABLE $_");
             }
     
-        };
+      };
     print LOG '-- Dropped ', join(', ', @tlist), "\n" ;
-    }
+}
 
  
 #################################################
@@ -503,6 +515,13 @@ use strict ;
                 { 'id' => 12,  'name' => "'Twelvth Name'",  'value1' => 99912, 'addon' => "''" },
                 { 'id' => 13,  'name' => "'Thirdteenth Name'",  'value1' => 'NULL', 'addon' => 'NULL' },
                 { 'id' => 14,  'name' => "'Fourteenth Name'",  'value1' => 0, 'addon' => 'NULL' },
+                { 'id' => 15,  'name' => "15",  'value1' => 15, 'addon' => 'NULL' },
+                { 'id' => 16,  'name' => "15",  'value1' => 15, 'addon' => 'NULL' },
+                { 'id' => 17,  'name' => 1,  'value1' => 2, 'addon' => 'NULL' },
+                { 'id' => 18,  'name' => 3,  'value1' =>  42, 'addon' => '42' },
+                { 'id' => 19,  'name' => 2,  'value1' =>  42, 'addon' => '42' },
+                { 'id' => 20,  'name' => 2,  'value1' =>  3, 'addon' => '42' },
+
             ],
             [
                 { 'id' => 1 ,  'name2' => "'First Name in Tab2'",  'value2' => 29991, "$Table[3]_id" => 1  },
@@ -614,9 +633,9 @@ use strict ;
     skip1:
 
     #$dbh->commit () ;
-    $dbh->disconnect ; # or die "Cannot disconnect from $DSN ($DBI::errstr)" ;
+#    $dbh->disconnect ; # or die "Cannot disconnect from $DSN ($DBI::errstr)" ;
 
-    undef $dbh ;
+#    undef $dbh ;
 
     printlog "ok\n";
 
@@ -632,7 +651,7 @@ use strict ;
     printlogf "Setup Object for $Table[0]";
     print LOG "\n--------------------\n" ;
 
-    $set1 = DBIx::Recordset->New ($DSN, $Table[0], $User, $Password) or die "not ok\n" ;
+    $set1 = DBIx::Recordset->New ($dbh, $Table[0], $User, $Password) or die "not ok\n" ;
     tie @set1, 'DBIx::Recordset', $set1 ;
     tie %set1, 'DBIx::Recordset::CurrRow', $set1 ;
 
@@ -655,7 +674,7 @@ use strict ;
     printlogf "Setup Object for $Table[1]";
     print LOG "\n--------------------\n" ;
 
-    $set2 = tie @set2, 'DBIx::Recordset', { '!DataSource'   =>  $DSN,
+    $set2 = tie @set2, 'DBIx::Recordset', { '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[1]} or die "not ok ($DBI::errstr)" ;
@@ -679,7 +698,7 @@ use strict ;
         printlogf "Setup Object for $Table[0], $Table[1]";
         print LOG "\n--------------------\n" ;
 
-        $set3 = DBIx::Recordset->New ($DSN, "$Table[0], $Table[1]", $User, $Password) or die "not ok\n" ;
+        $set3 = DBIx::Recordset->New ($dbh, "$Table[0], $Table[1]", $User, $Password) or die "not ok\n" ;
         tie @set3, 'DBIx::Recordset', $set3 ;
         tie %set3, 'DBIx::Recordset::CurrRow', $set3 ;
 
@@ -720,7 +739,7 @@ use strict ;
         printlogf "Setup Object for $Table[0], $Table[2]";
         print LOG "\n--------------------\n" ;
 
-        $set4 = tie @set4, 'DBIx::Recordset', { '!DataSource'   =>  $DSN,
+        $set4 = tie @set4, 'DBIx::Recordset', { '!DataSource'   =>  $dbh,
                                                 '!Username'     =>  $User,
                                                 '!Password'     =>  $Password,
                                                 '!Table'        =>  "$Table[0], $Table[2]"} or die "not ok ($DBI::errstr)" ;
@@ -750,7 +769,7 @@ use strict ;
         printlogf "Setup Object for $Table[0], $Table[3]";
         print LOG "\n--------------------\n" ;
 
-        $set5 = DBIx::Recordset->New ($DSN, "$Table[0], $Table[3]", $User, $Password) or die "not ok\n" ;
+        $set5 = DBIx::Recordset->New ($dbh, "$Table[0], $Table[3]", $User, $Password) or die "not ok\n" ;
         tie @set5, 'DBIx::Recordset', $set5 ;
         tie %set5, 'DBIx::Recordset::CurrRow', $set5 ;
 
@@ -778,7 +797,7 @@ use strict ;
     printlogf "Setup Object for $Table[0]";
     print LOG "\n--------------------\n" ;
 
-    $set1 = tie @set1, 'DBIx::Recordset', { '!DataSource'   =>  $DSN,
+    $set1 = tie @set1, 'DBIx::Recordset', { '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0]} or die "not ok ($DBI::errstr)" ;
@@ -831,7 +850,7 @@ use strict ;
         printlogf "Select $Table[1].name2 id=id";
         print LOG "\n--------------------\n" ;
 
-        *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[0], $Table[1]",
@@ -921,22 +940,22 @@ use strict ;
     printlogf "Select multiply fields 2";
     print LOG "\n--------------------\n" ;
 
-    $set1 -> Select ({'+name&value1' => "Third Name",
+    $set1 -> Select ({'+name&value1' => 15,
                            '$operator' => '='})  or die "not ok ($DBI::errstr)" ;
 
 
-    Check ($Driver eq 'CSV'?[3]:[3, 14], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ($Driver eq 'CSV'?[3]:[15, 16], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
 
     printlogf "Select multiply fields & values";
     print LOG "\n--------------------\n" ;
 
-    $set1 -> Select ({'+name&value1' => "Second Name\t9991",
+    $set1 -> Select ({'+name&value1' => "2\t3",
                            '$operator' => '='})  or die "not ok ($DBI::errstr)" ;
 
 
-    Check ($Driver eq 'CSV'?[1,2]:[1,2,14], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ($Driver eq 'CSV'?[1,2]:[17,19,19,20], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
 
@@ -1064,7 +1083,7 @@ use strict ;
     printlogf "New Search for more";
     print LOG "\n--------------------\n" ;
 
-    *set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  $Table[0],
@@ -1101,7 +1120,7 @@ use strict ;
     printlogf "New Search for more 2";
     print LOG "\n--------------------\n" ;
 
-    *set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  $Table[0],
@@ -1165,7 +1184,7 @@ use strict ;
 
     $set1 -> Search ({'$start'=>5,'$max'=>5, '$next'=>1, '$order'=>'id'})  or die "not ok ($DBI::errstr)" ;
 
-    Check ([11, 12, 13, 14], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ([11, 12, 13, 14, 15], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
 
@@ -1174,7 +1193,7 @@ use strict ;
 
     $set1 -> Search ({'$start'=>5,'$max'=>5, '$last'=>1, '$order'=>'id'})  or die "not ok ($DBI::errstr)" ;
 
-    Check ([10, 11, 12, 13, 14], $TestFields[0], \@set1) or print "ok\n" ;
+    Check ([16, 17, 18, 19, 20], $TestFields[0], \@set1) or print "ok\n" ;
 
     # ---------------------
 
@@ -1208,7 +1227,7 @@ use strict ;
 	    $set1 -> Select ({value1 => 'xyz', '*value1' => 'is not null'})  or die "not ok ($DBI::errstr)" ;
 
 
-	    Check ([(1..12), 14], $TestFields[0], \@set1) or print "ok\n" ;
+	    Check ([(1..12), (14..20)], $TestFields[0], \@set1) or print "ok\n" ;
 	    }
 	}	    
     #---------------------
@@ -1247,7 +1266,7 @@ use strict ;
 
     if ($Driver ne 'Sybase')
         {
-	*set1 = DBIx::Recordset -> Setup ({'!DataSource' => $DSN,
+	*set1 = DBIx::Recordset -> Setup ({'!DataSource' => $dbh,
 						'!Username'     =>  $User,
 						'!Password'     =>  $Password,
 						'!Table'        =>  $Table[0],
@@ -1294,7 +1313,7 @@ use strict ;
 
 	# ---------------------
 
-	*set1 = DBIx::Recordset -> Setup ({'!DataSource' => $DSN,
+	*set1 = DBIx::Recordset -> Setup ({'!DataSource' => $dbh,
 						'!Username'     =>  $User,
 						'!Password'     =>  $Password,
 						'!Table'        =>  $Table[0],
@@ -1353,7 +1372,7 @@ use strict ;
         printlogf "New Search";
         print LOG "\n--------------------\n" ;
 
-        *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[0], $Table[2]",
@@ -1412,14 +1431,14 @@ use strict ;
         printlogf "Search multfield *<field>";
         print LOG "\n--------------------\n" ;
 
-        $set6 -> Search ({"+$t0\lid|$t0\laddon" =>  "7\tit",
+        $set6 -> Search ({"+$t0\lid|$t0\ldbixrs1.value1" =>  "7\t9991",
                           "$t0\lname"           =>  'Fourth Name',
                           "\*$t0\lid"            =>  '<',
-                          "\*$t0\laddon"         =>  '=',
+                          "\*$t0\lvalue1"         =>  '=',
                           "\*$t0\lname"          =>  '<>',
                           '$conj'               =>  'and' }) or die "not ok ($DBI::errstr)" ;
 
-        Check ([1,2,3,5,6,10], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
+        Check ([1,2,3,5,6,7,8,9,10,11,12], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
 
         # ---------------------
 
@@ -1428,7 +1447,7 @@ use strict ;
         printlogf "Search \$compconj";
         print LOG "\n--------------------\n" ;
 
-        $set6 -> Search ({"+$t0\lid|$t0\laddon"     =>  "6\tit",
+        $set6 -> Search ({"+$t0\lid|$t0\laddon"     =>  "6\t42",
                           "$t0\lname"          =>  'Fourth Name',
                           "\*$t0\lid"           =>  '>',
                           "\*$t0\laddon"        =>  '<>',
@@ -1438,7 +1457,7 @@ use strict ;
 
 	if (!$EmptyIsNull)
 	    {
-	    Check ([1,3,4,5,7,8,9,10,11,12], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
+	    Check ([4,7,8,9,10,11,12], ['id', 'name', 'txt'], \@set6) or print "ok\n" ;
 	    }
 	else	
 	    {
@@ -1451,7 +1470,11 @@ use strict ;
         printlogf "Order, Group, Append";
         print LOG "\n--------------------\n" ;
 
-        $set6 -> Search ({id => 5, '$order' => 'id', '$group' => 'name', '$append' => ';;'}) ;
+        $set6 -> Search 
+	  ({
+	    id => 5, '$order' => 'id', '$group' => 'name', 
+	    '$append' => ';;', '$makesql' => 1
+	   }) ;
 
             {
             #my $should = 'SELECT id, name, txt FROM dbixrs1, dbixrs3 WHERE (dbixrs1.value1=dbixrs3.value1) and (  ((id = 5))) GROUP BY name ORDER BY id ;;' ;
@@ -1480,7 +1503,7 @@ use strict ;
             printlogf "Search with JOIN";
             print LOG "\n--------------------\n" ;
 
-            *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+            *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                                 '!Username'     =>  $User,
                                                 '!Password'     =>  $Password,
                                                 '!Table'        =>  "$Table[0], $Table[2]",
@@ -1499,7 +1522,7 @@ use strict ;
         printlogf "New Search id_typ";
         print LOG "\n--------------------\n" ;
 
-        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[0], $Table[3]",
@@ -1515,7 +1538,7 @@ use strict ;
         printlogf "!LongNames with !Fields";
         print LOG "\n--------------------\n" ;
 
-        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[0], $Table[3]",
@@ -1548,7 +1571,7 @@ use strict ;
         printlogf "!LongNames without !Fields";
         print LOG "\n--------------------\n" ;
 
-        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[0], $Table[3]",
@@ -1586,7 +1609,7 @@ use strict ;
         {
         printlogf "Quoted Identifiers";
         print LOG "\n--------------------\n" ;
-        *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "\"$Table[8]\"",
@@ -1604,7 +1627,7 @@ use strict ;
 
     printlogf "New Setup";
     print LOG "\n--------------------\n" ;
-    *set8 = DBIx::Recordset -> Setup  ({  '!DataSource'   =>  $DSN,
+    *set8 = DBIx::Recordset -> Setup  ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]"}) or die "not ok ($DBI::errstr)" ;
@@ -1637,7 +1660,7 @@ use strict ;
 
 
     *set9 = DBIx::Recordset -> Insert ({%h,
-                                        ('!DataSource'   =>  $DSN,
+                                        ('!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]")}) or die "not ok ($DBI::errstr)" ;
@@ -1734,7 +1757,7 @@ use strict ;
 
     {
     local *set10 = DBIx::Recordset -> Update ({%h,
-                                        ('!DataSource'   =>  $DSN,
+                                        ('!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]",
@@ -1760,7 +1783,7 @@ use strict ;
 
 
     *set11 = DBIx::Recordset -> Delete ({%h,
-                                        ('!DataSource'   =>  $DSN,
+                                        ('!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]",
@@ -1782,7 +1805,7 @@ use strict ;
 
     *set12 = DBIx::Recordset -> Execute ({'id'  => 20,
                                        '*id' => '<',
-                                       '!DataSource'   =>  $DSN,
+                                       '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                        '!Table'        =>  "$Table[1]",
@@ -1799,7 +1822,7 @@ use strict ;
 
     *set13 = DBIx::Recordset -> Execute ({'=search' => 'ok',
                         'name'  => 'Fourth Name',
-                        '!DataSource'   =>  $DSN,
+                        '!DataSource'   =>  $dbh,
                         '!Username'     =>  $User,
                         '!Password'     =>  $Password,
                         '!Table'        =>  "$Table[0]",
@@ -1820,7 +1843,7 @@ use strict ;
                         'name2'  => 'insert by exec',
                         'value2'  => 3031,
     # Execute should ignore the following params, since it is already setup
-                        '!DataSource'   =>  $DSN,
+                        '!DataSource'   =>  $dbh,
                         '!Username'     =>  $User,
                         '!Password'     =>  $Password,
                         '!Table'        =>  "quztr",
@@ -1918,7 +1941,7 @@ use strict ;
 	{
         printlogf "DeleteWithLinks";
         print LOG "\n--------------------\n" ;
-        *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+        *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[7],
@@ -1946,7 +1969,7 @@ use strict ;
     printlogf "Array Update/Insert";
     print LOG "\n--------------------\n" ;
 
-    *set20 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -1994,7 +2017,7 @@ use strict ;
     $set20[0]{id}    = 1234 ;
     $set20[0]{name}  = 'New rec 1234' ;
 
-    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2045,7 +2068,7 @@ use strict ;
     #$set20c -> Search ({'id'            =>  1234}) or die "not ok ($DBI::errstr)" ;
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set20c') ;
-    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2077,7 +2100,7 @@ use strict ;
     undef *set20c ;
     
     
-    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2104,7 +2127,7 @@ use strict ;
     #$set20c -> Search ({'id'            =>  123456}) or die "not ok ($DBI::errstr)" ;
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set20c') ;
-    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2135,7 +2158,7 @@ use strict ;
     #$set20c -> Search ({'id'            =>  1234567}) or die "not ok ($DBI::errstr)" ;
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set20c') ;
-    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2166,7 +2189,7 @@ use strict ;
     #$set20c -> Search ({'id'            =>  876}) or die "not ok ($DBI::errstr)" ;
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set20c') ;
-    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set20c = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2182,7 +2205,7 @@ use strict ;
     
 
         {
-        local *set13 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+        local *set13 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[1]",
@@ -2209,7 +2232,7 @@ use strict ;
 
         my %set13h2 ;
 
-        tie %set13h2, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+        tie %set13h2, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  "$Table[1]",
@@ -2264,7 +2287,7 @@ use strict ;
         my %set13h3 ;
         my @set13h3 ;
 
-        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[0],
@@ -2319,7 +2342,7 @@ use strict ;
 
         my %set13h3 ;
 
-        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[3],
@@ -2346,7 +2369,7 @@ use strict ;
 
         my %set13h3 ;
 
-        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+        tie %set13h3, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                             '!Username'     =>  $User,
                                             '!Password'     =>  $Password,
                                             '!Table'        =>  $Table[3],
@@ -2372,7 +2395,7 @@ use strict ;
     # ---------------------
 
 
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2399,7 +2422,7 @@ use strict ;
     printlogf "Select name (Hash) with setup";
     print LOG "\n--------------------\n" ;
 
-    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                            '!Username'     =>  $User,
                                            '!Password'     =>  $Password,
                                            '!Table'        =>  "$Table[1]",
@@ -2428,7 +2451,7 @@ use strict ;
     
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set14') ;
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2461,7 +2484,7 @@ use strict ;
     
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set14') ;
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2492,7 +2515,7 @@ use strict ;
     
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set14') ;
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2523,7 +2546,7 @@ use strict ;
     
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set14') ;
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2558,7 +2581,7 @@ use strict ;
     
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set14') ;
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2597,7 +2620,7 @@ use strict ;
     
     # The resetup is neccessary to work with all, also stupid drivers (MSAccess)
     DBIx::Recordset::Undef ('set14') ;
-    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Setup ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2644,7 +2667,7 @@ use strict ;
     printlogf "Test error within setup";
     print LOG "\n--------------------\n" ;
 
-    *set14 = DBIx::Recordset -> Update ({'!DataSource'   =>  $DSN,
+    *set14 = DBIx::Recordset -> Update ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  $Table[1],
@@ -2675,7 +2698,7 @@ use strict ;
     printlogf "MoreRecords on empty set";
     print LOG "\n--------------------\n" ;
 
-    *set4 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set4 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2698,7 +2721,7 @@ use strict ;
     printlogf "First on empty set";
     print LOG "\n--------------------\n" ;
 
-    *set5 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set5 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2721,7 +2744,7 @@ use strict ;
     printlogf "Next on empty set";
     print LOG "\n--------------------\n" ;
 
-    *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set6 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2744,7 +2767,7 @@ use strict ;
     printlogf "Use First to get first record";
     print LOG "\n--------------------\n" ;
 
-    *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set7 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2766,7 +2789,7 @@ use strict ;
     printlogf "Use First/Next to get all records";
     print LOG "\n--------------------\n" ;
 
-    *set8 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set8 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2788,7 +2811,7 @@ use strict ;
     printlogf "Use Next to get all records";
     print LOG "\n--------------------\n" ;
 
-    *set9 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set9 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2824,7 +2847,7 @@ use strict ;
     printlogf "Update via assigning array ref";
     print LOG "\n--------------------\n" ;
 
-    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2873,7 +2896,7 @@ use strict ;
 
     DBIx::Recordset::Undef ('set1') ;
 
-    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2889,7 +2912,7 @@ use strict ;
     printlogf "Update via assigning array ref 2";
     print LOG "\n--------------------\n" ;
 
-    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2931,7 +2954,7 @@ use strict ;
 
     DBIx::Recordset::Undef ('set1') ;
 
-    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[1]",
@@ -2947,7 +2970,7 @@ use strict ;
     printlogf "Select with sub table";
     print LOG "\n--------------------\n" ;
 
-    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[0]",
@@ -2980,7 +3003,7 @@ use strict ;
 
     DBIx::Recordset::Undef ('set1') ;
 
-    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[0]",
@@ -3007,7 +3030,7 @@ use strict ;
     printlogf "Add with sub table";
     print LOG "\n--------------------\n" ;
 
-    *set1 = DBIx::Recordset -> Setup ({ '!DataSource'   =>  $DSN,
+    *set1 = DBIx::Recordset -> Setup ({ '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[0]",
@@ -3037,7 +3060,7 @@ use strict ;
 
     DBIx::Recordset::Undef ('set1') ;
 
-    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set1_ = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[0]",
@@ -3061,7 +3084,7 @@ use strict ;
     printlogf "Select sub table NULL";
     print LOG "\n--------------------\n" ;
 
-    *set2 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+    *set2 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                         '!Table'        =>  "$Table[0]",
@@ -3089,7 +3112,7 @@ use strict ;
 	printlogf "Select with linked name mode 1";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3115,7 +3138,7 @@ use strict ;
 	printlogf "Select with linked name hash access";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3149,7 +3172,7 @@ use strict ;
 	printlogf "Select with linked names mode 1";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3174,7 +3197,7 @@ use strict ;
 	printlogf "Select with linked name mode 2";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3215,7 +3238,7 @@ use strict ;
 	printlogf "Select with linked names mode 2";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3254,7 +3277,7 @@ use strict ;
 	printlogf "Select with linked name mode 3";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3295,7 +3318,7 @@ use strict ;
 	printlogf "Select with linked names mode 3";
 	print LOG "\n--------------------\n" ;
 
-	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $DSN,
+	*set3 = DBIx::Recordset -> Search ({  '!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					    '!Table'        =>  "$Table[0]",
@@ -3346,7 +3369,7 @@ use strict ;
     printlogf "Delete from hash";
     print LOG "\n--------------------\n" ;
 
-    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                            '!Username'     =>  $User,
                                            '!Password'     =>  $Password,
                                            '!Table'        =>  "$Table[1]",
@@ -3358,7 +3381,7 @@ use strict ;
 
     DelTestRowAndId (1, 5) ;
 
-    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]"}) or die "not ok ($DBI::errstr)" ;
@@ -3373,7 +3396,7 @@ use strict ;
     printlogf "Clear hash disabled";
     print LOG "\n--------------------\n" ;
 
-    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                            '!Username'     =>  $User,
                                            '!Password'     =>  $Password,
                                            '!Table'        =>  $Table[1],
@@ -3401,7 +3424,7 @@ use strict ;
 
     printlogf "";
 
-    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]"}) or die "not ok ($DBI::errstr)" ;
@@ -3416,7 +3439,7 @@ use strict ;
     printlogf "Clear hash";
     print LOG "\n--------------------\n" ;
 
-    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                            '!Username'     =>  $User,
                                            '!Password'     =>  $Password,
                                            '!Table'        =>  "$Table[1]",
@@ -3434,7 +3457,7 @@ use strict ;
 	DelTestRowAndId (1, $id) ;
 	}
 
-    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]"}) or die "not ok ($DBI::errstr)" ;
@@ -3448,7 +3471,7 @@ use strict ;
     printlogf "Assign hash";
     print LOG "\n--------------------\n" ;
 
-    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $DSN,
+    tie %set15h, 'DBIx::Recordset::Hash', {'!DataSource'   =>  $dbh,
                                            '!Username'     =>  $User,
                                            '!Password'     =>  $Password,
                                            '!Table'        =>  "$Table[0]",
@@ -3480,7 +3503,7 @@ use strict ;
 	}
     
 
-    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set3 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[0]"}) or die "not ok ($DBI::errstr)" ;
@@ -3495,7 +3518,7 @@ use strict ;
     printlogf "Input Filter";
     print LOG "\n--------------------\n" ;
 
-    *set3 = DBIx::Recordset -> Insert ({'!DataSource'   =>  $DSN,
+    *set3 = DBIx::Recordset -> Insert ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]",
@@ -3512,7 +3535,7 @@ use strict ;
     AddTestRowAndId (1, { id => '4455', name2 => '19991005'}) ;
 
 
-    *set4 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set4 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]",
@@ -3538,7 +3561,7 @@ use strict ;
 
     AddTestRowAndId (1, { id => '4455', name2 => '05.10.99'}) ;
     
-    *set5 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+    *set5 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
                                         '!Username'     =>  $User,
                                         '!Password'     =>  $Password,
                                          '!Table'        =>  "$Table[1]",
@@ -3559,7 +3582,7 @@ use strict ;
 
     # ---------------------
 
-    printlogf "";
+    printlogf "look for 4455";
     print LOG "\n--------------------\n" ;
 
     $set5 -> Search ({id => 4455
@@ -3575,25 +3598,25 @@ use strict ;
 
     # ---------------------
 
-    if ($Driver ne 'CSV')
+    if ($Driver !~ /(?i:csv|sqlite)/)
 	{
 	printlogf "I/O Filter on type";
 	print LOG "\n--------------------\n" ;
 
     
-	*set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $DSN,
+	*set6 = DBIx::Recordset -> Search ({'!DataSource'   =>  $dbh,
 					    '!Username'     =>  $User,
 					    '!Password'     =>  $Password,
 					     '!Table'        =>  "$Table[1]",
 					     'name2'         =>  '05.10.99',
 					     '!Filter'   => 
 						{
-						DBI::SQL_CHAR     => 
+						&DBI::SQL_CHAR()     => 
 						    [ 
 							sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
 							sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
 						    ],
-						DBI::SQL_VARCHAR     => 
+						&DBI::SQL_VARCHAR()     => 
 						    [ 
 							sub { shift =~ /(\d\d)\.(\d\d)\.(\d\d)/ ; "19$3$2$1"},
 							sub { shift =~ /\d\d(\d\d)(\d\d)(\d\d)/ ; "$3.$2.$1"}
@@ -3622,7 +3645,7 @@ use strict ;
 
 
 
-        my $db = DBIx::Database -> new ({'!DataSource'   =>  $DSN,
+        my $db = DBIx::Database -> new ({'!DataSource'   =>  $dbh,
 				        '!Username'     =>  $User,
 				        '!Password'     =>  $Password,
                                         '!KeepOpen'     => 1}) ;
@@ -3644,12 +3667,16 @@ use strict ;
 
         foreach (@Table)
             {
-            if (!$tables -> {lc($_)} && !$tables -> {uc($_)} )
+
+		if (!$tables -> {lc($_)} && !$tables -> {uc($_)} )
                 {
                 printlog "ERROR in $lasttest: table $_ not found\n" ;
 	        $errors++ ;
                 }        
-            my $l = $db -> TableLink ($_) ;
+		my $l = $db -> TableLink ($_) ;
+		
+		warn "TableLink for $_: " . Dumper($l);
+		
             if ($_ eq $Table[1] && (($n = keys (%$l)) != 1 || !$l -> {"-$Table[3]"}))
                 {
                 printlog "ERROR in $lasttest: table $_ does not contains the right link  (#$n)\n" ;
@@ -3680,7 +3707,7 @@ use strict ;
         # ---------------------
 
 
-        if ($Driver ne 'CSV')
+        if ($Driver !~ /(csv|sqlite)/i)
 	    {
 	    printlogf "DBIx::Database and I/O Filter";
 	    print LOG "\n--------------------\n" ;
@@ -3714,7 +3741,7 @@ use strict ;
 					         }) or die "not ok ($DBI::errstr)" ;
 
 
-        if ($Driver ne 'CSV')
+        if ($Driver !~ /(?i:csv|sqlite)/)
             {
 	    Check ($TestIds[1], $TestFields[1], \@set7) or print "ok\n" ;
             }    
@@ -3760,7 +3787,7 @@ use strict ;
 
 
 
-        my $db2 = DBIx::Database -> new ({'!DataSource'   =>  $DSN,
+        my $db2 = DBIx::Database -> new ({'!DataSource'   =>  $dbh,
 				        '!Username'     =>  $User,
 				        '!Password'     =>  $Password,
                                         '!KeepOpen'     => 1,
@@ -3932,11 +3959,13 @@ use strict ;
     #########################################################################################
 
      # cleanup
-     if (!$nocleanup)
+     if (!$nocleanup and $Driver ne 'SQLite')
         {
-        my  $dbh = DBIx::Recordset -> SetupObject ({'!DataSource' =>  $DSN,
+
+        my  $dbh = DBIx::Recordset -> SetupObject ({'!DataSource' =>  $dbh,
                                                  '!Username' =>  $User, '!Password' =>  $Password
                                                 });
+
         DropTestTables($dbh, @Table);
         $dbh->Disconnect;
         }
